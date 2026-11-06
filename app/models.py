@@ -69,7 +69,7 @@ class LedgerEntry(Base):
 
 class AuditEvent(Base):
     __tablename__ = "audit_events"
-    __table_args__ = (CheckConstraint("outcome IN ('succeeded', 'refused')", name="ck_audit_valid_outcome"),)
+    __table_args__ = (CheckConstraint("outcome IN ('succeeded', 'refused', 'replayed')", name="ck_audit_valid_outcome"),)
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     actor_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
     account_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)

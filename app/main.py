@@ -147,9 +147,10 @@ def statement(account_id: str, request: Request, db: Session = Depends(get_db)):
         return RedirectResponse("/dashboard?error=Account%20not%20available", status_code=303)
     entries = list(db.scalars(select(LedgerEntry).where(LedgerEntry.account_id == account.id).order_by(LedgerEntry.created_at.desc(), LedgerEntry.id.desc()).limit(100)).all())
     refusals = list(db.scalars(select(AuditEvent).where(AuditEvent.account_id == account.id, AuditEvent.outcome == "refused").order_by(AuditEvent.created_at.desc(), AuditEvent.id.desc()).limit(100)).all())
-    actor_ids = {e.actor_id for e in entries} | {e.actor_id for e in refusals}
+    replays = list(db.scalars(select(AuditEvent).where(AuditEvent.account_id == account.id, AuditEvent.outcome == "replayed").order_by(AuditEvent.created_at.desc(), AuditEvent.id.desc()).limit(100)).all())
+    actor_ids = {e.actor_id for e in entries} | {e.actor_id for e in refusals} | {e.actor_id for e in replays}
     actors = {u.id: u.username for u in db.scalars(select(User).where(User.id.in_(actor_ids))).all()} if actor_ids else {}
-    return templates.TemplateResponse(request=request, name="statement.html", context={"user": user, "session": session, "account": account, "entries": entries, "refusals": refusals, "actors": actors})
+    return templates.TemplateResponse(request=request, name="statement.html", context={"user": user, "session": session, "account": account, "entries": entries, "refusals": refusals, "replays": replays, "actors": actors})
 
 
 @app.post("/accounts")
@@ -199,5 +200,7 @@ def transact(request: Request, action: str = Form(...), amount: str = Form(...),
         db.commit()
         return RedirectResponse("/dashboard?error=Enter%20a%20valid%20amount%20with%20up%20to%20two%20decimals", status_code=303)
     result = move_money(db, actor=user, action=action, amount_paise=paise, source_id=source_id or None, destination_id=destination_id or None, idempotency_key=idempotency_key)
+    if result.replayed:
+        result.message = "This request was already processed; the original result was returned without another money movement."
     key = "notice" if result.ok else "error"
     return RedirectResponse(f"/dashboard?{key}={quote(result.message)}", status_code=303)

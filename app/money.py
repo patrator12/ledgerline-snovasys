@@ -82,6 +82,21 @@ def _record_refusal(db: Session, actor: User, account_id: str | None, action: st
     db.add(AuditEvent(actor_id=actor.id, account_id=account_id, action=action, outcome="refused", details=details))
 
 
+def _record_replay(db: Session, actor: User, account_id: str | None, amount: int, key: str, result: dict) -> None:
+    db.add(AuditEvent(
+        actor_id=actor.id,
+        account_id=account_id,
+        action="idempotency_replay",
+        outcome="replayed",
+        details={
+            "amount_paise": amount,
+            "original_transfer_id": result.get("transfer_id"),
+            "key_fingerprint": hashlib.sha256(key.encode()).hexdigest()[:16],
+        },
+    ))
+    db.commit()
+
+
 def _refuse_before_key(db: Session, actor: User, action: str, amount: int, account_id: str | None, reason: str) -> MoneyResult:
     safe_action = action if action in {"deposit", "withdrawal", "transfer"} else "invalid_request"
     try:
@@ -140,6 +155,7 @@ def move_money(
             db.commit()
             return MoneyResult(False, "refused", "This idempotency key belongs to a different request")
         previous = existing.result or {}
+        _record_replay(db, actor, source_id or destination_id, amount_paise, idempotency_key, previous)
         return MoneyResult(previous.get("ok", False), previous.get("status", "refused"), previous.get("message", "Request in progress"), previous.get("transfer_id"), True)
 
     record = IdempotencyRecord(actor_id=actor.id, key=idempotency_key, request_hash=digest, result=None)
@@ -151,6 +167,7 @@ def move_money(
         prior = db.scalar(select(IdempotencyRecord).where(IdempotencyRecord.actor_id == actor.id, IdempotencyRecord.key == idempotency_key))
         if prior and prior.request_hash == digest and prior.result:
             res = prior.result
+            _record_replay(db, actor, source_id or destination_id, amount_paise, idempotency_key, res)
             return MoneyResult(res["ok"], res["status"], res["message"], res.get("transfer_id"), True)
         return MoneyResult(False, "refused", "A request with this key is already being processed")
 

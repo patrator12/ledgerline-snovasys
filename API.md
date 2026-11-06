@@ -27,5 +27,5 @@ All application routes are same-origin HTML routes. POST routes use form encodin
 - Holders may withdraw only from accounts they own and transfer only between accounts they own. They cannot deposit.
 - Auditors may not call a money movement successfully.
 - A source must have enough available balance after its row lock is acquired. Zero or negative balances are refused.
-- A replay with the same key and same payload returns the first result. The same key with a different payload is refused and audited.
+- A replay with the same key and same payload returns the first result, adds an append-only replay audit event, and is visible in the account statement. The same key with a different payload is refused and audited.
 - Transfers lock account rows in sorted account-ID order, update both balances, write both ledger postings, record the audit event, and save the idempotency result in one database transaction.

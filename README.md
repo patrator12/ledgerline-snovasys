@@ -50,7 +50,7 @@ The server applies these checks on each request. UI visibility is not an authori
 2. The service hashes the request fields and checks whether this actor/key already has a result. A changed payload under the same key is refused.
 3. It inserts the idempotency record inside the transaction, then locks the existing source and destination rows with SELECT FOR UPDATE in sorted ID order.
 4. After acquiring the locks, it checks account status, role, ownership, and available source balance.
-5. If valid, it updates both cached balances, inserts equal-and-opposite ledger postings, writes an audit event, and saves the response on the idempotency record.
+5. If valid, it updates both cached balances, inserts equal-and-opposite ledger postings, writes an audit event, and saves the response on the idempotency record. A matching retry returns that saved response and adds an append-only replay event without posting money again.
 6. One commit makes all those writes visible together. If any database write fails, none of the movement is committed.
 7. If another request has the same actor/key, PostgreSQL's unique constraint makes it wait for the first transaction. It then returns the saved result or, if the first transaction rolled back, can process the request itself.
 

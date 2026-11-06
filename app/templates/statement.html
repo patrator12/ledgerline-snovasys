@@ -14,4 +14,9 @@
   {% for event in refusals %}<tr><td class="date-cell">{{ event.created_at.strftime('%d %b %Y · %H:%M') }}</td><td>{{ event.action|title }}</td><td>{{ actors.get(event.actor_id, 'Unknown') }}</td><td><span class="status-refused">{{ event.details.get('reason', 'Refused') }}</span></td><td>{% if event.details.get('resulting_balance_paise') is not none %}{{ event.details.get('resulting_balance_paise')|money }}{% else %}—{% endif %}</td><td class="align-right">{{ event.details.get('amount_paise', 0)|money }}</td></tr>{% else %}<tr><td colspan="6" class="empty-cell">No refused attempts recorded.</td></tr>{% endfor %}
   </tbody></table></div>
 </section>
+<section class="section-block"><div class="section-head"><div><p class="eyebrow">REQUEST HISTORY</p><h2>Duplicate retries</h2></div><span class="quiet">Latest 100</span></div>
+  <div class="table-wrap"><table><thead><tr><th>Time</th><th>Original reference</th><th>Initiated by</th><th>Request fingerprint</th><th class="align-right">Amount</th></tr></thead><tbody>
+  {% for event in replays %}<tr><td class="date-cell">{{ event.created_at.strftime('%d %b %Y · %H:%M') }}</td><td class="mono">{{ (event.details.get('original_transfer_id') or '—')[:8] }}</td><td>{{ actors.get(event.actor_id, 'Unknown') }}</td><td class="mono">{{ event.details.get('key_fingerprint', '—') }}</td><td class="align-right">{{ event.details.get('amount_paise', 0)|money }}</td></tr>{% else %}<tr><td colspan="5" class="empty-cell">No duplicate retries recorded.</td></tr>{% endfor %}
+  </tbody></table></div>
+</section>
 {% endblock %}

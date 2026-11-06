@@ -5,6 +5,13 @@ from app.database import Base
 from app import models  # noqa: F401
 
 
+def upgrade_audit_outcomes(engine) -> None:
+    """Allow the explicit replay outcome on both fresh and existing databases."""
+    with engine.begin() as connection:
+        connection.execute(text("ALTER TABLE audit_events DROP CONSTRAINT IF EXISTS ck_audit_valid_outcome"))
+        connection.execute(text("ALTER TABLE audit_events ADD CONSTRAINT ck_audit_valid_outcome CHECK (outcome IN ('succeeded', 'refused', 'replayed'))"))
+
+
 def install_append_only_guard(engine, table_name: str) -> None:
     with engine.begin() as connection:
         connection.execute(text(f"""
@@ -25,6 +32,7 @@ def install_append_only_guard(engine, table_name: str) -> None:
 if __name__ == "__main__":
     engine = create_engine(MIGRATION_DATABASE_URL, pool_pre_ping=True)
     Base.metadata.create_all(bind=engine)
+    upgrade_audit_outcomes(engine)
     install_append_only_guard(engine, "ledger_entries")
     install_append_only_guard(engine, "audit_events")
     app_user = "ledgerline_app"

@@ -9,7 +9,7 @@ from sqlalchemy import create_engine, select, text
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.database import Base
-from app.init_db import install_append_only_guard
+from app.init_db import install_append_only_guard, upgrade_audit_outcomes
 from app.models import Account, AuditEvent, IdempotencyRecord, LedgerEntry, User
 from app.money import move_money
 
@@ -26,6 +26,7 @@ TestingSession = sessionmaker(bind=engine, expire_on_commit=False)
 def clean_database():
     """These tests only run against the explicitly named disposable test database."""
     Base.metadata.create_all(bind=engine)
+    upgrade_audit_outcomes(engine)
     with engine.begin() as connection:
         connection.execute(text("TRUNCATE audit_events, ledger_entries, idempotency_records, web_sessions, accounts, users RESTART IDENTITY CASCADE"))
     install_append_only_guard(engine, "ledger_entries")
@@ -92,6 +93,10 @@ def test_replayed_idempotency_key_returns_original_result_without_second_posting
     with TestingSession() as db:
         assert db.scalar(select(Account.balance_paise).where(Account.id == ids["source"])) == 8_000
         assert len(db.scalars(select(LedgerEntry).where(LedgerEntry.transfer_id == first.transfer_id)).all()) == 2
+        replay_events = list(db.scalars(select(AuditEvent).where(AuditEvent.outcome == "replayed")).all())
+        assert len(replay_events) == 1
+        assert replay_events[0].details["original_transfer_id"] == first.transfer_id
+        assert len(replay_events[0].details["key_fingerprint"]) == 16
 
 
 def test_reusing_key_for_different_payload_is_refused(actors_and_accounts):
@@ -145,10 +150,15 @@ def test_auditor_cannot_move_money(actors_and_accounts):
         assert db.scalar(select(Account.balance_paise).where(Account.id == ids["source"])) == 10_000
 
 
-def test_ledger_rows_are_database_append_only(actors_and_accounts):
+@pytest.mark.parametrize("table", ["ledger_entries", "audit_events"])
+@pytest.mark.parametrize("operation", ["UPDATE", "DELETE"])
+def test_financial_and_audit_rows_are_database_append_only(actors_and_accounts, table, operation):
     ids = actors_and_accounts
     result = run_movement(ids["holder"], action="withdrawal", amount=100, source=ids["source"], key="append-only-0001")
     assert result.ok
     with TestingSession() as db, pytest.raises(Exception, match="append-only"):
-        db.execute(text("UPDATE ledger_entries SET amount_paise = 0 WHERE transfer_id = :id"), {"id": uuid.UUID(result.transfer_id)})
+        if table == "ledger_entries":
+            db.execute(text(f"{operation} ledger_entries SET amount_paise = 0 WHERE transfer_id = :id"), {"id": uuid.UUID(result.transfer_id)})
+        else:
+            db.execute(text(f"{operation} audit_events SET action = 'tampered' WHERE details ->> 'transfer_id' = :id"), {"id": result.transfer_id})
         db.commit()
