@@ -1,0 +1,7 @@
+.env
+.docker-config/
+.venv/
+work/
+__pycache__/
+.pytest_cache/
+*.py[cod]

@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>{% block title %}LedgerLine{% endblock %} · LedgerLine</title>
+  <link rel="stylesheet" href="{{ url_for('static', path='styles.css') }}">
+</head>
+<body>
+{% if user %}
+  <aside class="rail">
+    <a class="brand" href="/dashboard" aria-label="LedgerLine overview"><span class="brand-mark">L</span><span>LedgerLine</span></a>
+    <nav aria-label="Main navigation">
+      <a class="nav-link active" href="/dashboard"><span class="nav-icon">⌂</span>Overview</a>
+      <a class="nav-link" href="/dashboard#accounts"><span class="nav-icon">▤</span>Accounts</a>
+      <a class="nav-link" href="/dashboard#activity"><span class="nav-icon">↔</span>Activity</a>
+      <a class="nav-link" href="/dashboard#audit"><span class="nav-icon">◇</span>Audit</a>
+    </nav>
+    <div class="rail-bottom">
+      <div class="user-chip"><span class="user-dot">{{ user.username[:1]|upper }}</span><div><strong>{{ user.username }}</strong><small>{{ user.role|title }}</small></div></div>
+      <form method="post" action="/logout"><input type="hidden" name="csrf" value="{{ session.csrf_token }}"><button class="logout" type="submit">Sign out <span>↗</span></button></form>
+    </div>
+  </aside>
+{% endif %}
+<main class="page {% if not user %}page-auth{% endif %}">
+  {% block content %}{% endblock %}
+</main>
+</body>
+</html>

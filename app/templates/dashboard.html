@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% block title %}Overview{% endblock %}
+{% block content %}
+<div class="topline"><div><p class="eyebrow">YOUR LEDGER</p><h1>Overview</h1></div><div class="top-meta"><span class="live-dot"></span>Balances current</div></div>
+{% if notice %}<div class="notice success">{{ notice }}</div>{% endif %}
+{% if error %}<div class="notice error">{{ error }}</div>{% endif %}
+<section class="balance-row">
+  <div><p class="label">Total available balance</p><p class="total">{{ total|money }}</p><p class="muted">Across {{ accounts|length }} active account{% if accounts|length != 1 %}s{% endif %}</p></div>
+  {% if user.role in ['admin','holder'] %}<a class="button primary" href="#move-money">New money movement <span>→</span></a>{% endif %}
+</section>
+<section id="accounts" class="section-block">
+  <div class="section-head"><div><p class="eyebrow">ACCOUNTS</p><h2>Account balances</h2></div>{% if user.role == 'admin' %}<span class="quiet">{{ accounts|length }} active</span>{% endif %}</div>
+  {% if accounts %}
+  <div class="table-wrap"><table><thead><tr><th>Account</th><th>Currency</th><th>Available balance</th><th>Owner</th><th></th></tr></thead><tbody>
+    {% for account in accounts %}<tr><td><span class="account-glyph">{{ account.name[:1]|upper }}</span><a class="row-link" href="/accounts/{{ account.id }}">{{ account.name }}</a></td><td>{{ account.currency }}</td><td class="amount-positive">{{ account.balance_paise|money }}</td><td>{% if account.owner_id %}{{ actors.get(account.owner_id, 'Account holder') }}{% else %}Shared{% endif %}</td><td><a class="text-link" href="/accounts/{{ account.id }}">Statement <span>↗</span></a></td></tr>{% endfor %}
+  </tbody></table></div>
+  {% else %}<div class="empty-state"><strong>No accounts yet</strong><p>An administrator can create the first account.</p></div>{% endif %}
+</section>
+{% if user.role in ['admin','holder'] %}
+<section id="move-money" class="section-block movement-block">
+  <div class="section-head"><div><p class="eyebrow">MONEY MOVEMENT</p><h2>Record a movement</h2></div><span class="quiet">All actions are checked server-side</span></div>
+  <form method="post" action="/transactions" class="movement-form">
+    <input type="hidden" name="csrf" value="{{ session.csrf_token }}"><input type="hidden" name="idempotency_key" value="{{ idempotency_key }}">
+    <label>Action<select name="action" required>{% if user.role == 'admin' %}<option value="deposit">Deposit</option>{% endif %}<option value="withdrawal">Withdrawal</option><option value="transfer">Transfer</option></select></label>
+    <label>From account<select name="source_id"><option value="">Not applicable</option>{% for account in accounts %}<option value="{{ account.id }}">{{ account.name }} · {{ account.balance_paise|money }}</option>{% endfor %}</select></label>
+    <label>To account<select name="destination_id"><option value="">Not applicable</option>{% for account in accounts %}<option value="{{ account.id }}">{{ account.name }}</option>{% endfor %}</select></label>
+    <label>Amount (INR)<input name="amount" inputmode="decimal" placeholder="0.00" pattern="[0-9]+(\.[0-9]{1,2})?" required></label>
+    <div class="form-submit"><button class="button primary" type="submit">Review and record <span>→</span></button><small>Refused attempts are recorded in the audit trail.</small></div>
+  </form>
+</section>
+{% endif %}
+{% if user.role == 'admin' %}
+<section class="section-block compact-block">
+  <div class="section-head"><div><p class="eyebrow">ADMINISTRATION</p><h2>Create an account</h2></div></div>
+  <form method="post" action="/accounts" class="create-form"><input type="hidden" name="csrf" value="{{ session.csrf_token }}"><label>Account name<input name="name" maxlength="120" required placeholder="e.g. Payroll operating"></label><label>Owner<select name="owner_id"><option value="">Shared account</option>{% for person in holders %}<option value="{{ person.id }}">{{ person.username }}</option>{% endfor %}</select></label><button class="button secondary" type="submit">Create account</button></form>
+</section>
+{% endif %}
+<section id="activity" class="section-block">
+  <div class="section-head"><div><p class="eyebrow">ACTIVITY</p><h2>Recent ledger entries</h2></div><span class="quiet">Append-only record</span></div>
+  {% if entries %}<div class="table-wrap"><table><thead><tr><th>Time</th><th>Reference</th><th>Account</th><th>Type</th><th>Initiated by</th><th class="align-right">Amount</th></tr></thead><tbody>
+    {% for entry in entries %}<tr><td class="date-cell">{{ entry.created_at.strftime('%d %b %Y · %H:%M') }}</td><td class="mono">{{ entry.transfer_id[:8] }}</td><td>{% for account in accounts %}{% if account.id == entry.account_id %}{{ account.name }}{% endif %}{% endfor %}</td><td>{{ entry.kind|replace('_',' ')|title }}</td><td>{{ actors.get(entry.actor_id, 'Unknown') }}</td><td class="align-right {% if entry.amount_paise > 0 %}amount-positive{% else %}amount-negative{% endif %}">{{ entry.amount_paise|money }}</td></tr>{% endfor %}
+  </tbody></table></div>{% else %}<div class="empty-state"><strong>No activity recorded</strong><p>Every successful or refused attempt will be traceable here.</p></div>{% endif %}
+</section>
+<section id="audit" class="audit-note"><span class="audit-icon">⌁</span><div><strong>Audit trail is append-only</strong><p>Successful postings and refused money movement attempts are recorded with the initiating user and timestamp.</p></div></section>
+{% endblock %}

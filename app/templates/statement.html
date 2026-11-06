@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block title %}{{ account.name }} statement{% endblock %}
+{% block content %}
+<a class="back-link" href="/dashboard">← Overview</a>
+<div class="topline"><div><p class="eyebrow">ACCOUNT STATEMENT</p><h1>{{ account.name }}</h1></div><span class="account-state"><span class="live-dot"></span>Active</span></div>
+<section class="balance-row statement-balance"><div><p class="label">Available balance</p><p class="total">{{ account.balance_paise|money }}</p></div><div class="account-meta">{{ account.currency }}<br><small>Account ID · {{ account.id[:8] }}</small></div></section>
+<section class="section-block"><div class="section-head"><div><p class="eyebrow">POSTINGS</p><h2>Ledger entries</h2></div><span class="quiet">Latest 100</span></div>
+  <div class="table-wrap"><table><thead><tr><th>Time</th><th>Reference</th><th>Type</th><th>Initiated by</th><th>Running balance</th><th class="align-right">Amount</th></tr></thead><tbody>
+  {% for entry in entries %}<tr><td class="date-cell">{{ entry.created_at.strftime('%d %b %Y · %H:%M') }}</td><td class="mono">{{ entry.transfer_id[:8] }}</td><td>{{ entry.kind|replace('_',' ')|title }}</td><td>{{ actors.get(entry.actor_id, 'Unknown') }}</td><td>{{ entry.resulting_balance_paise|money }}</td><td class="align-right {% if entry.amount_paise > 0 %}amount-positive{% else %}amount-negative{% endif %}">{{ entry.amount_paise|money }}</td></tr>{% else %}<tr><td colspan="6" class="empty-cell">No postings yet.</td></tr>{% endfor %}
+  </tbody></table></div>
+</section>
+<section class="section-block"><div class="section-head"><div><p class="eyebrow">CONTROL HISTORY</p><h2>Refused attempts</h2></div><span class="quiet">Latest 100</span></div>
+  <div class="table-wrap"><table><thead><tr><th>Time</th><th>Action</th><th>Initiated by</th><th>Reason</th><th>Balance at attempt</th><th class="align-right">Requested amount</th></tr></thead><tbody>
+  {% for event in refusals %}<tr><td class="date-cell">{{ event.created_at.strftime('%d %b %Y · %H:%M') }}</td><td>{{ event.action|title }}</td><td>{{ actors.get(event.actor_id, 'Unknown') }}</td><td><span class="status-refused">{{ event.details.get('reason', 'Refused') }}</span></td><td>{% if event.details.get('resulting_balance_paise') is not none %}{{ event.details.get('resulting_balance_paise')|money }}{% else %}—{% endif %}</td><td class="align-right">{{ event.details.get('amount_paise', 0)|money }}</td></tr>{% else %}<tr><td colspan="6" class="empty-cell">No refused attempts recorded.</td></tr>{% endfor %}
+  </tbody></table></div>
+</section>
+{% endblock %}
