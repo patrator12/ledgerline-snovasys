@@ -55,3 +55,10 @@ This record is being kept as work proceeds. Entries describe actual assistance a
 - **Security / audit note:** A Lighthouse smoke audit of the running login page found low-contrast text and no description; source fixes are in this commit. The running container could not be rebuilt during this review.
 - **Verification:** `python3 -m compileall -q app tests` and `git diff --check` passed. The PostgreSQL suite could not run: Docker returned `permission denied` for its local API socket, and local Python lacks SQLAlchemy. Browser smoke loaded the login page and stylesheet; full auth journeys and new pages need a rebuilt app and seeded test credentials.
 - **Commit:** [b0b1cce](https://github.com/patrator12/ledgerline-snovasys/commit/b0b1cce06835a0ed16e22786e3c5dee7fe93cdd0).
+
+## 2026-11-06 — PostgreSQL regression verification
+
+- **Asked:** Correct the three failures from the rebuilt integration suite and verify the current test image.
+- **Produced:** Fixed the direct request fixture to include the FastAPI app and corrected the append-only DELETE statements to use valid PostgreSQL syntax.
+- **Verification:** The user rebuilt the image and ran `docker compose --profile test run --build --rm tests`; all 15 tests passed in 0.55 seconds.
+- **Commit:** [8bbe1cd](https://github.com/patrator12/ledgerline-snovasys/commit/8bbe1cd).
