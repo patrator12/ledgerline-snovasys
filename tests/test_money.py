@@ -15,7 +15,7 @@ from app.database import Base
 from app.init_db import install_append_only_guard, upgrade_audit_outcomes
 from app.models import Account, AuditEvent, IdempotencyRecord, LedgerEntry, User, WebSession
 from app.money import create_web_session, move_money
-from app.main import audit_log, create_account, logout
+from app.main import app as fastapi_app, audit_log, create_account, logout
 
 
 TEST_DATABASE_URL = os.getenv("TEST_DATABASE_URL")
@@ -68,7 +68,7 @@ def authenticated_request(token, path="/accounts"):
         "type": "http", "http_version": "1.1", "method": "POST", "scheme": "http",
         "path": path, "raw_path": path.encode(), "query_string": b"",
         "headers": [(b"cookie", f"{SESSION_COOKIE}={token}".encode())],
-        "client": ("testclient", 50000), "server": ("testserver", 80),
+        "client": ("testclient", 50000), "server": ("testserver", 80), "app": fastapi_app,
     })
 
 
@@ -258,7 +258,17 @@ def test_financial_and_audit_rows_are_database_append_only(actors_and_accounts, 
     assert result.ok
     with TestingSession() as db, pytest.raises(Exception, match="append-only"):
         if table == "ledger_entries":
-            db.execute(text(f"{operation} ledger_entries SET amount_paise = 0 WHERE transfer_id = :id"), {"id": uuid.UUID(result.transfer_id)})
+            if operation == "UPDATE":
+                statement = "UPDATE ledger_entries SET amount_paise = 0 WHERE transfer_id = :id"
+                parameter = uuid.UUID(result.transfer_id)
+            else:
+                statement = "DELETE FROM ledger_entries WHERE transfer_id = :id"
+                parameter = uuid.UUID(result.transfer_id)
         else:
-            db.execute(text(f"{operation} audit_events SET action = 'tampered' WHERE details ->> 'transfer_id' = :id"), {"id": result.transfer_id})
+            if operation == "UPDATE":
+                statement = "UPDATE audit_events SET action = 'tampered' WHERE details ->> 'transfer_id' = :id"
+            else:
+                statement = "DELETE FROM audit_events WHERE details ->> 'transfer_id' = :id"
+            parameter = result.transfer_id
+        db.execute(text(statement), {"id": parameter})
         db.commit()
