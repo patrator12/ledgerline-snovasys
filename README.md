@@ -22,6 +22,8 @@ Requirements: Docker Desktop with Docker Compose.
 
 The sample records include two holder-owned accounts, with opening balances recorded in the ledger, and one shared settlement account. The passwords are never stored in this repository. Do not use local demo credentials for a public deployment.
 
+The container runs as an unprivileged user. For an HTTPS deployment, set `APP_ENV=production` in the deployment environment so session cookies become Secure and the app adds HSTS.
+
 Stop the app with docker compose down. Database data is stored in a named Docker volume and remains after stopping the containers.
 
 ## Money rules

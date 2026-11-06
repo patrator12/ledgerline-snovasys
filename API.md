@@ -16,7 +16,7 @@ All application routes are same-origin HTML routes. POST routes use form encodin
 ## Transaction form fields
 
 - action: deposit, withdrawal, or transfer.
-- amount: positive INR amount with up to two decimal places; stored as integer paise.
+- amount: positive INR amount up to ₹1,000,000,000 with up to two decimal places; stored as integer paise. Exponent notation and malformed values are refused.
 - source_id: required for withdrawals and transfers.
 - destination_id: required for deposits and transfers.
 - idempotency_key: 8–100 characters, scoped to the authenticated actor.

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import secrets
+import re
 import uuid
 from decimal import Decimal, InvalidOperation
 from datetime import datetime, timezone
@@ -16,7 +17,7 @@ from sqlalchemy.orm import Session
 from app.config import SECURE_COOKIES, SESSION_COOKIE
 from app.database import get_db
 from app.models import Account, AuditEvent, LedgerEntry, User, WebSession
-from app.money import DUMMY_PASSWORD_HASH, create_web_session, current_session, move_money, verify_password
+from app.money import DUMMY_PASSWORD_HASH, MAX_TRANSACTION_PAISE, create_web_session, current_session, move_money, verify_password
 
 app = FastAPI(title="LedgerLine", docs_url=None, redoc_url=None)
 app.mount("/static", StaticFiles(directory="app/static"), name="static")
@@ -225,8 +226,10 @@ def transact(request: Request, action: str = Form(...), amount: str = Form(...),
         db.commit()
         return RedirectResponse("/dashboard?error=Session%20token%20expired", status_code=303)
     try:
+        if len(amount) > 13 or not re.fullmatch(r"[0-9]{1,10}(?:\.[0-9]{1,2})?", amount):
+            raise InvalidOperation
         value = Decimal(amount)
-        if not value.is_finite() or value * 100 != (value * 100).to_integral_value():
+        if not value.is_finite() or value <= 0 or value > Decimal(MAX_TRANSACTION_PAISE // 100) or value * 100 != (value * 100).to_integral_value():
             raise InvalidOperation
         paise = int(value * 100)
     except (InvalidOperation, ValueError):

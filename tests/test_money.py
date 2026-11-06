@@ -15,7 +15,7 @@ from app.database import Base
 from app.init_db import install_append_only_guard, upgrade_audit_outcomes
 from app.models import Account, AuditEvent, IdempotencyRecord, LedgerEntry, User, WebSession
 from app.money import create_web_session, move_money
-from app.main import app as fastapi_app, audit_log, create_account, logout
+from app.main import app as fastapi_app, audit_log, create_account, logout, transact
 
 
 TEST_DATABASE_URL = os.getenv("TEST_DATABASE_URL")
@@ -248,6 +248,23 @@ def test_invalid_logout_csrf_preserves_session_and_is_audited(actors_and_account
         assert db.scalar(select(WebSession.id).where(WebSession.token_hash == hashlib.sha256(token.encode()).hexdigest())) is not None
         denied = db.scalar(select(AuditEvent).where(AuditEvent.action == "logout", AuditEvent.outcome == "refused"))
         assert denied.details["reason"] == "invalid CSRF token"
+
+
+def test_transaction_rejects_extreme_decimal_exponent_before_integer_conversion(actors_and_accounts):
+    ids = actors_and_accounts
+    with TestingSession() as db:
+        holder = db.get(User, ids["holder"])
+        token, web_session = create_web_session(db, holder)
+        response = transact(
+            authenticated_request(token, "/transactions"),
+            action="withdrawal", amount="1e999999999", source_id=ids["source"], destination_id="",
+            idempotency_key="extreme-amount-01", csrf=web_session.csrf_token, db=db,
+        )
+        assert response.status_code == 303
+        assert db.scalar(select(Account.balance_paise).where(Account.id == ids["source"])) == 10_000
+        assert db.scalar(select(LedgerEntry.id).where(LedgerEntry.account_id == ids["source"])) is None
+        invalid_amount = db.scalar(select(AuditEvent).where(AuditEvent.actor_id == ids["holder"], AuditEvent.action == "transaction_request", AuditEvent.outcome == "refused"))
+        assert invalid_amount.details["reason"] == "invalid amount"
 
 
 @pytest.mark.parametrize("table", ["ledger_entries", "audit_events"])

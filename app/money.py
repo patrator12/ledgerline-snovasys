@@ -18,6 +18,7 @@ from app.models import Account, AuditEvent, IdempotencyRecord, LedgerEntry, User
 
 password_hasher = PasswordHash.recommended()
 DUMMY_PASSWORD_HASH = password_hasher.hash(secrets.token_urlsafe(32))
+MAX_TRANSACTION_PAISE = 100_000_000_000
 
 
 def hash_password(password: str) -> str:
@@ -140,7 +141,7 @@ def move_money(
             if supplied_id == destination_id:
                 destination_id = normalized_id
     account_ref = source_id or destination_id
-    if amount_paise <= 0 or amount_paise > 100_000_000_000:
+    if amount_paise <= 0 or amount_paise > MAX_TRANSACTION_PAISE:
         return _refuse_before_key(db, actor, action, amount_paise, account_ref, "Amount must be positive and within the demo limit")
     if len(idempotency_key) < 8 or len(idempotency_key) > 100:
         return _refuse_before_key(db, actor, action, amount_paise, account_ref, "Idempotency key must be 8–100 characters")
