@@ -5,3 +5,8 @@ work/
 __pycache__/
 .pytest_cache/
 *.py[cod]
+.env
+.env.*
+!.env.example
+.neon
+node_modules/
