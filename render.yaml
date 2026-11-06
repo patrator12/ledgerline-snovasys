@@ -1,0 +1,23 @@
+services:
+  - type: web
+    name: ledgerline-snovasys
+    runtime: docker
+    plan: free
+    region: singapore
+    dockerCommand: >-
+      sh -c 'python -m app.init_db && python -m app.seed_demo &&
+      exec uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-10000}'
+    healthCheckPath: /login
+    envVars:
+      - key: APP_ENV
+        value: production
+      - key: DATABASE_URL
+        sync: false
+      - key: MIGRATION_DATABASE_URL
+        sync: false
+      - key: SEED_ADMIN_PASSWORD
+        sync: false
+      - key: SEED_HOLDER_PASSWORD
+        sync: false
+      - key: SEED_AUDITOR_PASSWORD
+        sync: false
