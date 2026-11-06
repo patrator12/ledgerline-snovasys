@@ -58,7 +58,17 @@ def scoped_accounts(db: Session, user: User) -> list[Account]:
     query = select(Account).where(Account.active.is_(True))
     if user.role == "holder":
         query = query.where(Account.owner_id == user.id)
+    elif user.role not in {"admin", "auditor"}:
+        return []
     return list(db.scalars(query.order_by(Account.name)).all())
+
+
+def _record_account_creation_refusal(db: Session, actor: User, reason: str, *, owner_id: int | None = None) -> None:
+    details = {"reason": reason}
+    if owner_id is not None:
+        details["requested_owner_id"] = owner_id
+    db.add(AuditEvent(actor_id=actor.id, account_id=None, action="account_create", outcome="refused", details=details))
+    db.commit()
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -102,6 +112,10 @@ def logout(request: Request, csrf: str = Form(...), db: Session = Depends(get_db
         if csrf_ok(csrf, session):
             db.delete(session)
             db.commit()
+        else:
+            db.add(AuditEvent(actor_id=user.id, account_id=None, action="logout", outcome="refused", details={"reason": "invalid CSRF token"}))
+            db.commit()
+            return RedirectResponse("/dashboard?error=Session%20token%20expired", status_code=303)
     response = RedirectResponse("/login", status_code=303)
     response.delete_cookie(SESSION_COOKIE, path="/")
     return response
@@ -131,6 +145,10 @@ def statement(account_id: str, request: Request, db: Session = Depends(get_db)):
     if not identity:
         return RedirectResponse("/login", status_code=303)
     user, session = identity
+    if user.role not in {"admin", "auditor", "holder"}:
+        db.add(AuditEvent(actor_id=user.id, account_id=None, action="statement_view", outcome="refused", details={"reason": "unsupported user role"}))
+        db.commit()
+        return RedirectResponse("/dashboard?error=Account%20not%20available", status_code=303)
     try:
         account_id = str(uuid.UUID(account_id))
     except (ValueError, AttributeError):
@@ -153,18 +171,40 @@ def statement(account_id: str, request: Request, db: Session = Depends(get_db)):
     return templates.TemplateResponse(request=request, name="statement.html", context={"user": user, "session": session, "account": account, "entries": entries, "refusals": refusals, "replays": replays, "actors": actors})
 
 
+@app.get("/audit", response_class=HTMLResponse)
+def audit_log(request: Request, db: Session = Depends(get_db)):
+    identity = get_identity(request, db)
+    if not identity:
+        return RedirectResponse("/login", status_code=303)
+    user, session = identity
+    if user.role not in {"admin", "auditor"}:
+        db.add(AuditEvent(actor_id=user.id, account_id=None, action="audit_view", outcome="refused", details={"reason": "administrator or auditor role required"}))
+        db.commit()
+        return RedirectResponse("/dashboard?error=Not%20authorized", status_code=303)
+    events = list(db.scalars(select(AuditEvent).order_by(AuditEvent.created_at.desc(), AuditEvent.id.desc()).limit(100)).all())
+    actor_ids = {event.actor_id for event in events}
+    account_ids = {event.account_id for event in events if event.account_id}
+    actors = {person.id: person.username for person in db.scalars(select(User).where(User.id.in_(actor_ids))).all()} if actor_ids else {}
+    accounts = {account.id: account.name for account in db.scalars(select(Account).where(Account.id.in_(account_ids))).all()} if account_ids else {}
+    return templates.TemplateResponse(request=request, name="audit.html", context={"user": user, "session": session, "events": events, "actors": actors, "accounts": accounts})
+
+
 @app.post("/accounts")
 def create_account(request: Request, name: str = Form(...), owner_id: int | None = Form(None), csrf: str = Form(...), db: Session = Depends(get_db)):
     identity = get_identity(request, db)
     if not identity:
         return RedirectResponse("/login", status_code=303)
     user, session = identity
-    if not csrf_ok(csrf, session) or user.role != "admin":
+    valid_csrf = csrf_ok(csrf, session)
+    if not valid_csrf or user.role != "admin":
+        _record_account_creation_refusal(db, user, "invalid CSRF token" if not valid_csrf else "administrator role required")
         return RedirectResponse("/dashboard?error=Not%20authorized", status_code=303)
     name = name.strip()
     if not name or len(name) > 120:
+        _record_account_creation_refusal(db, user, "account name must contain 1–120 characters")
         return RedirectResponse("/dashboard?error=Enter%20an%20account%20name", status_code=303)
-    if owner_id is not None and not db.get(User, owner_id):
+    if owner_id is not None and not db.scalar(select(User.id).where(User.id == owner_id, User.role == "holder", User.active.is_(True))):
+        _record_account_creation_refusal(db, user, "owner must be an active account holder", owner_id=owner_id)
         return RedirectResponse("/dashboard?error=Account%20owner%20not%20found", status_code=303)
     account = Account(name=name, owner_id=owner_id, currency="INR", balance_paise=0)
     db.add(account)
@@ -195,7 +235,8 @@ def transact(request: Request, action: str = Form(...), amount: str = Form(...),
             account_id = str(uuid.UUID(supplied_account)) if supplied_account else None
         except (ValueError, AttributeError):
             account_id = None
-        balance = db.scalar(select(Account.balance_paise).where(Account.id == account_id)) if account_id else None
+        account = db.scalar(select(Account).where(Account.id == account_id).with_for_update()) if account_id else None
+        balance = account.balance_paise if account else None
         db.add(AuditEvent(actor_id=user.id, account_id=account_id, action="transaction_request", outcome="refused", details={"reason": "invalid amount", "requested_amount": amount[:60], "resulting_balance_paise": balance}))
         db.commit()
         return RedirectResponse("/dashboard?error=Enter%20a%20valid%20amount%20with%20up%20to%20two%20decimals", status_code=303)

@@ -27,7 +27,7 @@ Stop the app with docker compose down. Database data is stored in a named Docker
 ## Money rules
 
 - Amounts are stored as integer paise; no floating point is used for balance arithmetic.
-- Administrators can create accounts, deposit, withdraw, and transfer. Account holders can withdraw and transfer only between accounts they own. Auditors can view accounts and statements but cannot move money.
+- Administrators can create accounts, deposit, withdraw, and transfer. New owned accounts can be assigned only to active holders. Account holders can withdraw and transfer only between accounts they own. Auditors can view accounts, statements, and the global audit log but cannot move money.
 - Each movement has an actor-scoped idempotency key and a payload hash. Replaying the same key and request returns its saved result; reusing a key with a different request is refused.
 - Money-moving requests lock every involved account row in sorted ID order. The balance check, account balance updates, ledger postings, audit event, and idempotency result commit in one PostgreSQL transaction.
 - A transfer writes equal and opposite postings, so its postings sum to zero. Withdrawals and deposits are external movements and change the total by their amount.
@@ -62,7 +62,7 @@ The integration suite starts a separate PostgreSQL container with a temporary fi
 
         docker compose --profile test run --rm tests
 
-The tests cover transfer conservation, retries, idempotency-key payload conflicts, cross-account access, concurrent withdrawals, auditor restrictions, and database append-only behavior.
+The tests cover transfer conservation, retries and concurrent key conflicts, idempotency-key payload conflicts, cross-account access, concurrent withdrawals, account-owner assignment, auditor restrictions, audit-log access, and database append-only behavior.
 
 ## Current limits
 

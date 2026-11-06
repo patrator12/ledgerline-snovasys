@@ -1,17 +1,21 @@
 """Integration tests for money invariants. Set TEST_DATABASE_URL to a disposable PostgreSQL database."""
 
 import os
+import hashlib
 import threading
 import uuid
 
 import pytest
+from starlette.requests import Request
 from sqlalchemy import create_engine, select, text
 from sqlalchemy.orm import Session, sessionmaker
 
+from app.config import SESSION_COOKIE
 from app.database import Base
 from app.init_db import install_append_only_guard, upgrade_audit_outcomes
-from app.models import Account, AuditEvent, IdempotencyRecord, LedgerEntry, User
-from app.money import move_money
+from app.models import Account, AuditEvent, IdempotencyRecord, LedgerEntry, User, WebSession
+from app.money import create_web_session, move_money
+from app.main import audit_log, create_account, logout
 
 
 TEST_DATABASE_URL = os.getenv("TEST_DATABASE_URL")
@@ -57,6 +61,15 @@ def run_movement(actor_id, *, action, amount, source=None, destination=None, key
         actor = db.get(User, actor_id)
         return move_money(db, actor=actor, action=action, amount_paise=amount, source_id=source,
                           destination_id=destination, idempotency_key=key or str(uuid.uuid4()))
+
+
+def authenticated_request(token, path="/accounts"):
+    return Request({
+        "type": "http", "http_version": "1.1", "method": "POST", "scheme": "http",
+        "path": path, "raw_path": path.encode(), "query_string": b"",
+        "headers": [(b"cookie", f"{SESSION_COOKIE}={token}".encode())],
+        "client": ("testclient", 50000), "server": ("testserver", 80),
+    })
 
 
 def test_transfer_balances_both_accounts_and_conserves_total(actors_and_accounts):
@@ -106,6 +119,32 @@ def test_reusing_key_for_different_payload_is_refused(actors_and_accounts):
     assert first.ok and not second.ok
     with TestingSession() as db:
         assert db.scalar(select(Account.balance_paise).where(Account.id == ids["source"])) == 9_000
+        conflict = db.scalar(select(AuditEvent).where(AuditEvent.account_id == ids["source"], AuditEvent.outcome == "refused"))
+        assert conflict is not None
+        assert conflict.details["reason"] == "idempotency key reused with different request"
+
+
+def test_concurrent_same_key_different_payload_is_refused_and_audited(actors_and_accounts):
+    ids = actors_and_accounts
+    barrier = threading.Barrier(2)
+    outcomes = []
+
+    def send(amount):
+        barrier.wait(timeout=5)
+        outcomes.append(run_movement(ids["holder"], action="withdrawal", amount=amount, source=ids["source"], key="shared-race-key-01"))
+
+    workers = [threading.Thread(target=send, args=(amount,)) for amount in (1_000, 1_500)]
+    for worker in workers:
+        worker.start()
+    for worker in workers:
+        worker.join(timeout=10)
+    assert all(not worker.is_alive() for worker in workers)
+    assert sum(result.ok for result in outcomes) == 1
+    assert sum(not result.ok for result in outcomes) == 1
+    with TestingSession() as db:
+        assert db.scalar(select(Account.balance_paise).where(Account.id == ids["source"])) in {8_500, 9_000}
+        conflict = db.scalar(select(AuditEvent).where(AuditEvent.account_id == ids["source"], AuditEvent.outcome == "refused"))
+        assert conflict.details["reason"] == "idempotency key reused with different request"
 
 
 def test_account_holder_cannot_move_someone_elses_funds(actors_and_accounts):
@@ -148,6 +187,67 @@ def test_auditor_cannot_move_money(actors_and_accounts):
     assert not result.ok
     with TestingSession() as db:
         assert db.scalar(select(Account.balance_paise).where(Account.id == ids["source"])) == 10_000
+
+
+def test_account_creation_requires_admin_and_active_holder_owner(actors_and_accounts):
+    ids = actors_and_accounts
+    with TestingSession() as db:
+        inactive = User(username="inactive-holder", password_hash="unused", role="holder", active=False)
+        db.add(inactive)
+        db.commit()
+        admin = db.get(User, ids["admin"])
+        token, admin_session = create_web_session(db, admin)
+        response = create_account(authenticated_request(token), "Invalid auditor account", ids["auditor"], admin_session.csrf_token, db)
+        assert response.status_code == 303
+        assert db.scalar(select(Account.id).where(Account.name == "Invalid auditor account")) is None
+        refused_owner = db.scalar(select(AuditEvent).where(AuditEvent.action == "account_create", AuditEvent.outcome == "refused"))
+        assert refused_owner.details["reason"] == "owner must be an active account holder"
+        response = create_account(authenticated_request(token), "Valid holder account", ids["holder"], admin_session.csrf_token, db)
+        assert response.status_code == 303
+        assert db.scalar(select(Account.id).where(Account.name == "Valid holder account")) is not None
+
+        auditor = db.get(User, ids["auditor"])
+        auditor_token, auditor_session = create_web_session(db, auditor)
+        response = create_account(authenticated_request(auditor_token), "Unauthorized account", None, auditor_session.csrf_token, db)
+        assert response.status_code == 303
+        assert db.scalar(select(Account.id).where(Account.name == "Unauthorized account")) is None
+        refused_events = list(db.scalars(select(AuditEvent).where(AuditEvent.action == "account_create", AuditEvent.outcome == "refused")).all())
+        assert any(event.details["reason"] == "administrator role required" for event in refused_events)
+        response = create_account(authenticated_request(token), "Forged CSRF account", None, "wrong-token", db)
+        assert response.status_code == 303
+        assert db.scalar(select(Account.id).where(Account.name == "Forged CSRF account")) is None
+        refused_events = list(db.scalars(select(AuditEvent).where(AuditEvent.action == "account_create", AuditEvent.outcome == "refused")).all())
+        assert any(event.details["reason"] == "invalid CSRF token" for event in refused_events)
+
+
+def test_global_audit_log_is_admin_and_auditor_only(actors_and_accounts):
+    ids = actors_and_accounts
+    with TestingSession() as db:
+        holder = db.get(User, ids["holder"])
+        holder_token, holder_session = create_web_session(db, holder)
+        response = audit_log(authenticated_request(holder_token, "/audit"), db)
+        assert response.status_code == 303
+        denied = db.scalar(select(AuditEvent).where(AuditEvent.action == "audit_view", AuditEvent.outcome == "refused"))
+        assert denied.details["reason"] == "administrator or auditor role required"
+
+        auditor = db.get(User, ids["auditor"])
+        auditor_token, _ = create_web_session(db, auditor)
+        response = audit_log(authenticated_request(auditor_token, "/audit"), db)
+        assert response.status_code == 200
+        assert "Audit log" in response.body.decode()
+
+
+def test_invalid_logout_csrf_preserves_session_and_is_audited(actors_and_accounts):
+    ids = actors_and_accounts
+    with TestingSession() as db:
+        holder = db.get(User, ids["holder"])
+        token, _ = create_web_session(db, holder)
+        response = logout(authenticated_request(token, "/logout"), "wrong-token", db)
+        assert response.status_code == 303
+        assert response.headers["location"].startswith("/dashboard?")
+        assert db.scalar(select(WebSession.id).where(WebSession.token_hash == hashlib.sha256(token.encode()).hexdigest())) is not None
+        denied = db.scalar(select(AuditEvent).where(AuditEvent.action == "logout", AuditEvent.outcome == "refused"))
+        assert denied.details["reason"] == "invalid CSRF token"
 
 
 @pytest.mark.parametrize("table", ["ledger_entries", "audit_events"])

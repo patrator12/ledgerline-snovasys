@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block title %}Audit log{% endblock %}
+{% block content %}
+<div class="topline"><div><p class="eyebrow">CONTROL HISTORY</p><h1>Audit log</h1><p class="muted">Latest 100 append-only events across all accounts.</p></div><a class="text-link" href="/dashboard">← Overview</a></div>
+<section class="section-block">
+  <div class="table-wrap"><table><thead><tr><th>Time</th><th>Initiated by</th><th>Action</th><th>Outcome</th><th>Account</th><th>Reference / reason</th><th class="align-right">Amount</th></tr></thead><tbody>
+  {% for event in events %}
+    {% set reference = event.details.get('transfer_id') or event.details.get('original_transfer_id') %}
+    <tr>
+      <td class="date-cell">{{ event.created_at.strftime('%d %b %Y · %H:%M') }}</td>
+      <td>{{ actors.get(event.actor_id, 'Unknown') }}</td>
+      <td>{{ event.action|replace('_',' ')|title }}</td>
+      <td>{% if event.outcome == 'refused' %}<span class="status-refused">Refused</span>{% elif event.outcome == 'replayed' %}Replayed{% else %}Succeeded{% endif %}</td>
+      <td>{% if event.account_id %}{{ accounts.get(event.account_id, event.account_id[:8]) }}{% else %}—{% endif %}</td>
+      <td>{% if reference %}<span class="mono">{{ reference[:8] }}</span>{% elif event.details.get('reason') %}{{ event.details.get('reason') }}{% elif event.details.get('name') %}{{ event.details.get('name') }}{% else %}—{% endif %}</td>
+      <td class="align-right">{% if event.details.get('amount_paise') is not none %}{{ event.details.get('amount_paise')|money }}{% else %}—{% endif %}</td>
+    </tr>
+  {% else %}<tr><td colspan="7" class="empty-cell">No audit events recorded.</td></tr>{% endfor %}
+  </tbody></table></div>
+</section>
+{% endblock %}

@@ -169,7 +169,12 @@ def move_money(
             res = prior.result
             _record_replay(db, actor, source_id or destination_id, amount_paise, idempotency_key, res)
             return MoneyResult(res["ok"], res["status"], res["message"], res.get("transfer_id"), True)
-        return MoneyResult(False, "refused", "A request with this key is already being processed")
+        reason = "idempotency key reused with different request" if prior else "a request with this key could not be completed"
+        account = db.get(Account, source_id or destination_id) if (source_id or destination_id) else None
+        _record_refusal(db, actor, source_id or destination_id, action, amount_paise, reason, account.balance_paise if account else None)
+        db.commit()
+        message = "This idempotency key belongs to a different request" if prior else "A request with this key is already being processed"
+        return MoneyResult(False, "refused", message)
 
     involved_ids = sorted({i for i in (source_id, destination_id) if i})
     accounts = db.scalars(select(Account).where(Account.id.in_(involved_ids)).order_by(Account.id).with_for_update()).all() if involved_ids else []

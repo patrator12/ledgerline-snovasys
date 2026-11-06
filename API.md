@@ -9,6 +9,7 @@ All application routes are same-origin HTML routes. POST routes use form encodin
 | POST /logout | Authenticated + session CSRF | Deletes the current server-side session. |
 | GET /dashboard | Authenticated | Shows only owned accounts to holders; administrators and auditors can view all accounts. Shows recent successful ledger postings. |
 | GET /accounts/{account_id} | Authenticated | Shows a per-account statement with successful debit/credit rows and refused attempts, including the actor and resulting balance when known. Holder ownership is checked on the server. |
+| GET /audit | Administrator or auditor | Shows the latest 100 append-only audit events, including refused actions and idempotent retries. Other roles are refused and that attempt is recorded. |
 | POST /accounts | Administrator + session CSRF | Creates a zero-balance INR account and records an audit event. |
 | POST /transactions | Authenticated + session CSRF | Performs a deposit, withdrawal, or transfer after role and account checks. Requires a client idempotency key and amount with at most two decimals. |
 
