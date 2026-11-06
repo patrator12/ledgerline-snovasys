@@ -62,3 +62,11 @@ This record is being kept as work proceeds. Entries describe actual assistance a
 - **Produced:** Fixed the direct request fixture to include the FastAPI app and corrected the append-only DELETE statements to use valid PostgreSQL syntax.
 - **Verification:** The user rebuilt the image and ran `docker compose --profile test run --build --rm tests`; all 15 tests passed in 0.55 seconds.
 - **Commit:** [8bbe1cd](https://github.com/patrator12/ledgerline-snovasys/commit/8bbe1cd).
+
+## 2026-11-06 — Input and container hardening review
+
+- **Asked:** Continue reviewing the project for avoidable mistakes and harden concrete risks.
+- **Review finding:** The amount route converted scientific-notation decimals to integers before checking the demo limit, allowing a short extreme exponent to request excessive conversion work. Compose also fixed `APP_ENV` to development, the image ran as root, and the build context did not exclude `.env`.
+- **What I changed:** The route now accepts only short ASCII decimal amounts and checks the shared maximum before conversion; added a regression case. The image now runs as an unprivileged user, `.dockerignore` excludes local secrets, and `APP_ENV` can select production cookie and HSTS settings.
+- **Verification:** `python3 -m compileall -q app tests` and `git diff --check` passed. The expanded PostgreSQL suite needs a rebuild and rerun; Docker is not accessible from this review environment.
+- **Commit:** [583a77a](https://github.com/patrator12/ledgerline-snovasys/commit/583a77a8941612b26bb3e6728190c178f3c2f616).
