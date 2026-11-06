@@ -46,3 +46,12 @@ This record is being kept as work proceeds. Entries describe actual assistance a
 - **What I changed:** The fixture creates schema first and truncates only the explicitly configured disposable test database; removed the no-op assertion. Ran the suite in an isolated PostgreSQL test container; all eight cases passed.
 - **Security / audit note:** The concurrency test uses two threads, separate database sessions, and a barrier so both requests contend for the same starting balance.
 - **Commit:** [6607e29](https://github.com/patrator12/ledgerline-snovasys/commit/6607e29e012214850c9d8df0ff1dcd6ee469bd1c).
+
+## 2026-11-06 — Authorization and audit review
+
+- **Asked:** Apply relevant review and security skills, verify the existing build against the challenge, then continue hardening authorization and audit behavior.
+- **Produced:** Reviewed the FastAPI routes, transaction service, database grants/triggers, challenge docs, and the local login page. The review found that account creation could assign an auditor or inactive user, same-key concurrent payload conflicts could miss a refusal audit, and the dashboard's Audit link did not open an event log.
+- **What I changed:** Account creation now allows only active holders as owners and audits rejected requests; unknown roles fail closed on account and statement access; idempotency collision refusals are audited; admins and auditors can open a global, role-protected audit log. Added regression coverage for these paths, a favicon, and improved login-page text contrast.
+- **Security / audit note:** A Lighthouse smoke audit of the running login page found low-contrast text and no description; source fixes are in this commit. The running container could not be rebuilt during this review.
+- **Verification:** `python3 -m compileall -q app tests` and `git diff --check` passed. The PostgreSQL suite could not run: Docker returned `permission denied` for its local API socket, and local Python lacks SQLAlchemy. Browser smoke loaded the login page and stylesheet; full auth journeys and new pages need a rebuilt app and seeded test credentials.
+- **Commit:** [b0b1cce](https://github.com/patrator12/ledgerline-snovasys/commit/b0b1cce06835a0ed16e22786e3c5dee7fe93cdd0).
