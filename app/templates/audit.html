@@ -1,8 +1,14 @@
 {% extends "base.html" %}
 {% block title %}Audit log{% endblock %}
 {% block content %}
-<div class="topline"><div><p class="eyebrow">CONTROL HISTORY</p><h1>Audit log</h1><p class="muted">Latest 100 append-only events across all accounts.</p></div><a class="text-link" href="/dashboard">← Overview</a></div>
+<div class="topline"><div><p class="eyebrow">CONTROL HISTORY</p><h1>Audit log</h1><p class="muted">Filter events and browse older records.</p></div><a class="text-link" href="/dashboard">← Overview</a></div>
 <section class="section-block">
+  <form class="filter-bar" method="get" action="/audit">
+    <label>Action<select name="action"><option value="">All actions</option>{% for item in actions %}<option value="{{ item }}"{% if action_filter == item %} selected{% endif %}>{{ item|replace('_',' ')|title }}</option>{% endfor %}</select></label>
+    <label>Outcome<select name="outcome"><option value="">All outcomes</option>{% for item in ['succeeded', 'refused', 'replayed'] %}<option value="{{ item }}"{% if outcome_filter == item %} selected{% endif %}>{{ item|title }}</option>{% endfor %}</select></label>
+    <button class="button-secondary" type="submit">Apply filters</button>
+    {% if action_filter or outcome_filter %}<a class="text-link" href="{{ latest_url }}">Clear filters</a>{% endif %}
+  </form>
   <div class="table-wrap"><table><thead><tr><th>Time</th><th>Initiated by</th><th>Action</th><th>Outcome</th><th>Account</th><th>Reference / reason</th><th class="align-right">Amount</th></tr></thead><tbody>
   {% for event in events %}
     {% set reference = event.details.get('transfer_id') or event.details.get('original_transfer_id') %}
@@ -17,5 +23,9 @@
     </tr>
   {% else %}<tr><td colspan="7" class="empty-cell">No audit events recorded.</td></tr>{% endfor %}
   </tbody></table></div>
+  <nav class="audit-pagination" aria-label="Audit log pages">
+    {% if older_url %}<a class="text-link" href="{{ older_url }}">← Older events</a>{% endif %}
+    {% if request.query_params.get('before_id') %}<a class="text-link" href="{{ latest_url }}">Latest events →</a>{% endif %}
+  </nav>
 </section>
 {% endblock %}

@@ -4,6 +4,8 @@ import os
 import hashlib
 import threading
 import uuid
+from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 
 import pytest
 from starlette.requests import Request
@@ -13,9 +15,11 @@ from sqlalchemy.orm import Session, sessionmaker
 from app.config import SESSION_COOKIE
 from app.database import Base
 from app.init_db import install_append_only_guard, upgrade_audit_outcomes
-from app.models import Account, AuditEvent, IdempotencyRecord, LedgerEntry, User, WebSession
-from app.money import create_web_session, move_money
-from app.main import app as fastapi_app, audit_log, create_account, logout, transact
+from app.models import Account, AuditEvent, IdempotencyRecord, LedgerEntry, LoginThrottle, User, WebSession
+from app.money import create_web_session, current_session, hash_password, move_money
+from app.main import app as fastapi_app, audit_log, create_account, login, logout, statement, transact
+from app.login_throttle import FAILURE_LIMIT, login_is_blocked, lock_login_bucket, record_login_failure, throttle_key
+from app.audit_checkpoint import checkpoint_digest
 
 
 TEST_DATABASE_URL = os.getenv("TEST_DATABASE_URL")
@@ -32,7 +36,7 @@ def clean_database():
     Base.metadata.create_all(bind=engine)
     upgrade_audit_outcomes(engine)
     with engine.begin() as connection:
-        connection.execute(text("TRUNCATE audit_events, ledger_entries, idempotency_records, web_sessions, accounts, users RESTART IDENTITY CASCADE"))
+        connection.execute(text("TRUNCATE audit_events, ledger_entries, idempotency_records, web_sessions, login_throttles, accounts, users RESTART IDENTITY CASCADE"))
     install_append_only_guard(engine, "ledger_entries")
     install_append_only_guard(engine, "audit_events")
     yield
@@ -63,12 +67,21 @@ def run_movement(actor_id, *, action, amount, source=None, destination=None, key
                           destination_id=destination, idempotency_key=key or str(uuid.uuid4()))
 
 
-def authenticated_request(token, path="/accounts"):
+def authenticated_request(token, path="/accounts", method="POST", query_string=b""):
     return Request({
-        "type": "http", "http_version": "1.1", "method": "POST", "scheme": "http",
-        "path": path, "raw_path": path.encode(), "query_string": b"",
+        "type": "http", "http_version": "1.1", "method": method, "scheme": "http",
+        "path": path, "raw_path": path.encode(), "query_string": query_string,
         "headers": [(b"cookie", f"{SESSION_COOKIE}={token}".encode())],
         "client": ("testclient", 50000), "server": ("testserver", 80), "app": fastapi_app,
+    })
+
+
+def login_request(csrf, client_host="testclient"):
+    return Request({
+        "type": "http", "http_version": "1.1", "method": "POST", "scheme": "http",
+        "path": "/login", "raw_path": b"/login", "query_string": b"",
+        "headers": [(b"cookie", f"ledgerline_login_csrf={csrf}".encode())],
+        "client": (client_host, 50000), "server": ("testserver", 80), "app": fastapi_app,
     })
 
 
@@ -225,16 +238,146 @@ def test_global_audit_log_is_admin_and_auditor_only(actors_and_accounts):
     with TestingSession() as db:
         holder = db.get(User, ids["holder"])
         holder_token, holder_session = create_web_session(db, holder)
-        response = audit_log(authenticated_request(holder_token, "/audit"), db)
+        response = audit_log(authenticated_request(holder_token, "/audit"), db=db)
         assert response.status_code == 303
         denied = db.scalar(select(AuditEvent).where(AuditEvent.action == "audit_view", AuditEvent.outcome == "refused"))
         assert denied.details["reason"] == "administrator or auditor role required"
 
         auditor = db.get(User, ids["auditor"])
         auditor_token, _ = create_web_session(db, auditor)
-        response = audit_log(authenticated_request(auditor_token, "/audit"), db)
+        response = audit_log(authenticated_request(auditor_token, "/audit"), db=db)
         assert response.status_code == 200
         assert "Audit log" in response.body.decode()
+
+
+def test_audit_log_filters_and_pages_through_older_events(actors_and_accounts):
+    ids = actors_and_accounts
+    with TestingSession() as db:
+        auditor = db.get(User, ids["auditor"])
+        token, _ = create_web_session(db, auditor)
+        db.add_all([
+            AuditEvent(actor_id=ids["admin"], action="withdrawal", outcome="refused", details={"reason": str(index)})
+            for index in range(105)
+        ])
+        db.add(AuditEvent(actor_id=ids["admin"], action="deposit", outcome="succeeded", details={}))
+        db.commit()
+
+        first = audit_log(authenticated_request(token, "/audit", "GET", b"action=withdrawal&outcome=refused"), "withdrawal", "refused", None, db)
+        assert len(first.context["events"]) == 100
+        assert first.context["older_url"]
+        assert all(event.action == "withdrawal" and event.outcome == "refused" for event in first.context["events"])
+        before_id = first.context["events"][-1].id
+        query = f"action=withdrawal&outcome=refused&before_id={before_id}".encode()
+        older = audit_log(authenticated_request(token, "/audit", "GET", query), "withdrawal", "refused", before_id, db)
+        assert len(older.context["events"]) == 5
+        assert older.context["older_url"] is None
+        assert "Older events" in first.body.decode()
+        assert "Latest events" in older.body.decode()
+
+
+def test_login_requires_csrf_and_success_creates_session(actors_and_accounts):
+    ids = actors_and_accounts
+    with TestingSession() as db:
+        admin = db.get(User, ids["admin"])
+        admin.password_hash = hash_password("correct horse battery staple")
+        db.commit()
+        rejected = login(login_request("cookie-token"), "admin", "correct horse battery staple", "different-token", db)
+        assert rejected.status_code == 403
+        assert db.scalar(select(WebSession.id).where(WebSession.user_id == admin.id)) is None
+
+        csrf = "matching-cookie-token"
+        accepted = login(login_request(csrf), "admin", "correct horse battery staple", csrf, db)
+        assert accepted.status_code == 303
+        assert accepted.headers["location"] == "/dashboard"
+        assert db.scalar(select(WebSession.id).where(WebSession.user_id == admin.id)) is not None
+
+
+def test_login_throttle_blocks_after_five_bad_passwords(actors_and_accounts):
+    with TestingSession() as db:
+        csrf = "matching-cookie-token"
+        for _ in range(5):
+            response = login(login_request(csrf), "unknown-user", "wrong-password", csrf, db)
+            assert response.status_code == 401
+        blocked = login(login_request(csrf), "unknown-user", "wrong-password", csrf, db)
+        assert blocked.status_code == 429
+        assert int(blocked.headers["Retry-After"]) > 0
+        key_hash = throttle_key("unknown-user", "testclient")
+        row = db.get(LoginThrottle, key_hash)
+        assert row.failures == 5
+        assert row.blocked_until is not None
+
+        separate_ip = login(login_request(csrf, "another-client"), "unknown-user", "wrong-password", csrf, db)
+        assert separate_ip.status_code == 401
+
+
+def test_login_throttle_resets_after_window_expires(actors_and_accounts):
+    with TestingSession() as db:
+        key_hash = throttle_key("reset-user", "testclient")
+        start = datetime.now(timezone.utc) - timedelta(days=1)
+        for _ in range(FAILURE_LIMIT):
+            lock_login_bucket(db, key_hash)
+            record_login_failure(db, key_hash, now=start)
+        assert login_is_blocked(db, key_hash, now=start + timedelta(minutes=14)) is not None
+        assert login_is_blocked(db, key_hash, now=start + timedelta(minutes=16)) is None
+        lock_login_bucket(db, key_hash)
+        record_login_failure(db, key_hash, now=start + timedelta(minutes=16))
+        failures = db.scalar(select(LoginThrottle.failures).where(LoginThrottle.key_hash == key_hash))
+        assert failures == 1
+
+
+def test_expired_session_is_rejected_and_removed(actors_and_accounts):
+    ids = actors_and_accounts
+    with TestingSession() as db:
+        holder = db.get(User, ids["holder"])
+        token, session = create_web_session(db, holder)
+        session.expires_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+        db.commit()
+        assert current_session(db, authenticated_request(token)) is None
+        assert db.scalar(select(WebSession.id).where(WebSession.id == session.id)) is None
+
+
+def test_invalid_transaction_csrf_does_not_move_money_and_is_audited(actors_and_accounts):
+    ids = actors_and_accounts
+    with TestingSession() as db:
+        holder = db.get(User, ids["holder"])
+        token, _ = create_web_session(db, holder)
+        response = transact(
+            authenticated_request(token, "/transactions"),
+            action="withdrawal", amount="1.00", source_id=ids["source"], destination_id="",
+            idempotency_key="invalid-csrf-key-01", csrf="wrong-token", db=db,
+        )
+        assert response.status_code == 303
+        assert db.scalar(select(Account.balance_paise).where(Account.id == ids["source"])) == 10_000
+        denied = db.scalar(select(AuditEvent).where(AuditEvent.action == "transaction_request", AuditEvent.outcome == "refused"))
+        assert denied.details["reason"] == "invalid anti-CSRF token"
+
+
+def test_invalid_statement_account_id_is_refused_and_audited(actors_and_accounts):
+    ids = actors_and_accounts
+    with TestingSession() as db:
+        holder = db.get(User, ids["holder"])
+        token, _ = create_web_session(db, holder)
+        response = statement("not-a-valid-uuid", authenticated_request(token, "/accounts/not-a-valid-uuid", "GET"), db)
+        assert response.status_code == 303
+        denied = db.scalar(select(AuditEvent).where(AuditEvent.action == "statement_view", AuditEvent.outcome == "refused"))
+        assert denied.details["reason"] == "invalid account identifier"
+
+
+def test_audit_checkpoint_is_stable_and_detects_record_changes():
+    event = SimpleNamespace(
+        id=7,
+        actor_id=3,
+        account_id=None,
+        action="login",
+        outcome="refused",
+        details={"reason": "invalid credentials"},
+        created_at=datetime(2026, 11, 11, tzinfo=timezone.utc),
+    )
+    original = checkpoint_digest([event])
+    assert len(original) == 64
+    assert checkpoint_digest([event]) == original
+    event.details = {"reason": "changed"}
+    assert checkpoint_digest([event]) != original
 
 
 def test_invalid_logout_csrf_preserves_session_and_is_audited(actors_and_accounts):

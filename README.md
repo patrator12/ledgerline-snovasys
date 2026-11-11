@@ -22,9 +22,20 @@ Requirements: Docker Desktop with Docker Compose.
 
 The sample records include two holder-owned accounts, with opening balances recorded in the ledger, and one shared settlement account. The passwords are never stored in this repository. Do not use local demo credentials for a public deployment.
 
-The container runs as an unprivileged user. For an HTTPS deployment, set `APP_ENV=production` in the deployment environment so session cookies become Secure and the app adds HSTS.
+The container runs as an unprivileged user. For an HTTPS deployment, set `APP_ENV=production` in the deployment environment so session cookies become Secure and the app adds HSTS. Login failures are throttled in PostgreSQL: five bad passwords for the same username and client address in 15 minutes block that pair for 15 minutes. The shared database counter works across app instances; distributed attempts from different addresses can still evade it. Throttle keys store a SHA-256 digest instead of raw username/address values, and up to 100 buckets idle for seven days are pruned during successful or failed credential checks.
 
 Stop the app with docker compose down. Database data is stored in a named Docker volume and remains after stopping the containers.
+
+## Deployment configuration
+
+The Render blueprint is in `render.yaml`. It expects these private environment variables to be set in Render:
+
+- `DATABASE_URL`: pooled PostgreSQL URL for normal app requests.
+- `MIGRATION_DATABASE_URL`: direct PostgreSQL owner URL used for schema setup and demo seeding.
+- `SEED_ADMIN_PASSWORD`, `SEED_HOLDER_PASSWORD`, and `SEED_AUDITOR_PASSWORD`: passwords for the three demo users.
+- `APP_ENV=production`: enables Secure session cookies and HSTS.
+
+The Docker startup command applies the schema and append-only guards, seeds demo accounts, then starts Uvicorn on Render's `PORT`. Keep database URLs and passwords in the hosting provider's secret settings; never commit them or place live passwords in this README. The current public deployment URL and account passwords are intentionally not duplicated here.
 
 ## Money rules
 
@@ -62,21 +73,24 @@ The account-row lock is the concurrency control: the second withdrawal waits, th
 
 The integration suite starts a separate PostgreSQL container with a temporary filesystem. It does not touch the demo database.
 
-        docker compose --profile test run --rm tests
+        docker compose --profile test run --build --rm tests
 
-The tests cover transfer conservation, retries and concurrent key conflicts, idempotency-key payload conflicts, cross-account access, concurrent withdrawals, account-owner assignment, auditor restrictions, audit-log access, and database append-only behavior.
+The tests cover transfer conservation, deposits and withdrawals, retries and concurrent key conflicts, idempotency-key payload conflicts, cross-account access, concurrent withdrawals, account-owner assignment, auditor restrictions, login CSRF and throttling, session expiry, transaction CSRF, invalid account IDs, filtered audit pagination, audit checkpoint stability, audit-log access, amount parsing, and database append-only behavior. Run them against the isolated PostgreSQL test service after changes; they do not share the demo database.
 
 ## Current limits
 
-This is a challenge prototype, not a production banking service. It does not implement MFA, password reset, login rate limiting, multiple-currency conversion, reversals/refunds, holds, or signed/externally anchored audit hashes. The auditor view is read-only. Deployment still needs HTTPS and deployment-specific secrets; production cookies switch to Secure and the __Host- prefix when APP_ENV=production.
+This is a challenge prototype, not a production banking service. It does not implement MFA, password reset, multi-currency conversion, reversals/refunds, holds, automatic backups, or automatic external audit monitoring. Login throttling is per username/address pair and does not stop distributed guessing. Audit checkpoints detect changes only when the checkpoint file is stored separately with stronger access controls. The auditor view is read-only. Deployment still needs HTTPS and deployment-specific secrets; production cookies switch to Secure and the __Host- prefix when APP_ENV=production.
 
 ## Project files
 
 - app/money.py: authorization, idempotency, row locks, ledger posting, and refusal audit logic.
+- app/login_throttle.py: shared PostgreSQL-backed login failure throttling.
+- app/audit_checkpoint.py: point-in-time audit digest generation and verification.
 - app/models.py: database records and relationships.
 - app/main.py: login, statements, dashboard, and money-movement routes.
 - app/init_db.py: schema creation, append-only triggers, and restricted app-role grants.
 - THREATS.md: threat model, controls, and accepted risks.
+- OPERATIONS.md: startup troubleshooting, PostgreSQL backup/recovery, and out-of-band audit checkpoints.
 - PROMPTS.md: dated AI-use record. Add entries as you work and link each to the real commit that contains your review or correction; do not invent commit history.
 - API.md: endpoint behavior and access rules.
 - DEMO.md: a five-minute walkthrough outline for recording the required video.

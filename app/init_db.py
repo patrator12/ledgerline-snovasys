@@ -40,6 +40,7 @@ if __name__ == "__main__":
         connection.execute(text(f"GRANT USAGE ON SCHEMA public TO {app_user}"))
         connection.execute(text(f"GRANT SELECT ON users TO {app_user}"))
         connection.execute(text(f"GRANT SELECT, INSERT, DELETE ON web_sessions TO {app_user}"))
+        connection.execute(text(f"GRANT SELECT, INSERT, UPDATE, DELETE ON login_throttles TO {app_user}"))
         connection.execute(text(f"GRANT SELECT, INSERT ON accounts, idempotency_records TO {app_user}"))
         connection.execute(text(f"GRANT UPDATE (balance_paise) ON accounts TO {app_user}"))
         connection.execute(text(f"GRANT UPDATE (result) ON idempotency_records TO {app_user}"))

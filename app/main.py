@@ -5,9 +5,10 @@ import re
 import uuid
 from decimal import Decimal, InvalidOperation
 from datetime import datetime, timezone
-from urllib.parse import quote
+from typing import Annotated
+from urllib.parse import quote, urlencode
 
-from fastapi import Depends, FastAPI, Form, Request
+from fastapi import Depends, FastAPI, Form, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -18,6 +19,7 @@ from app.config import SECURE_COOKIES, SESSION_COOKIE
 from app.database import get_db
 from app.models import Account, AuditEvent, LedgerEntry, User, WebSession
 from app.money import DUMMY_PASSWORD_HASH, MAX_TRANSACTION_PAISE, create_web_session, current_session, move_money, verify_password
+from app.login_throttle import clear_login_failures, login_is_blocked, lock_login_bucket, record_login_failure, throttle_key
 
 app = FastAPI(title="LedgerLine", docs_url=None, redoc_url=None)
 app.mount("/static", StaticFiles(directory="app/static"), name="static")
@@ -90,14 +92,25 @@ def login_page(request: Request, db: Session = Depends(get_db)):
 
 
 @app.post("/login", response_class=HTMLResponse)
-def login(request: Request, username: str = Form(...), password: str = Form(...), csrf: str = Form(...), db: Session = Depends(get_db)):
+def login(request: Request, username: str = Form(..., max_length=80), password: str = Form(..., max_length=1024), csrf: str = Form(...), db: Session = Depends(get_db)):
     cookie_token = request.cookies.get("ledgerline_login_csrf", "")
     if not cookie_token or not secrets.compare_digest(cookie_token, csrf):
         return templates.TemplateResponse(request=request, name="login.html", context={"csrf": "", "error": "Refresh the page and try again."}, status_code=403)
-    user = db.scalar(select(User).where(User.username == username.strip()))
+    username = username.strip()
+    key_hash = throttle_key(username, request.client.host if request.client else "unknown")
+    lock_login_bucket(db, key_hash)
+    blocked_until = login_is_blocked(db, key_hash)
+    if blocked_until:
+        retry_after = max(1, int((blocked_until - datetime.now(timezone.utc)).total_seconds()))
+        response = templates.TemplateResponse(request=request, name="login.html", context={"csrf": cookie_token, "error": "Too many attempts. Wait before trying again."}, status_code=429)
+        response.headers["Retry-After"] = str(retry_after)
+        return response
+    user = db.scalar(select(User).where(User.username == username))
     valid_password = verify_password(password, user.password_hash if user else DUMMY_PASSWORD_HASH)
     if not user or not user.active or not valid_password:
+        record_login_failure(db, key_hash)
         return templates.TemplateResponse(request=request, name="login.html", context={"csrf": cookie_token, "error": "Username or password was not accepted."}, status_code=401)
+    clear_login_failures(db, key_hash)
     raw_token, _ = create_web_session(db, user)
     response = RedirectResponse("/dashboard", status_code=303)
     response.delete_cookie("ledgerline_login_csrf")
@@ -173,7 +186,13 @@ def statement(account_id: str, request: Request, db: Session = Depends(get_db)):
 
 
 @app.get("/audit", response_class=HTMLResponse)
-def audit_log(request: Request, db: Session = Depends(get_db)):
+def audit_log(
+    request: Request,
+    action: Annotated[str | None, Query(max_length=40)] = None,
+    outcome: Annotated[str | None, Query(pattern="^(succeeded|refused|replayed)$")] = None,
+    before_id: Annotated[int | None, Query(ge=1, le=9_223_372_036_854_775_807)] = None,
+    db: Session = Depends(get_db),
+):
     identity = get_identity(request, db)
     if not identity:
         return RedirectResponse("/login", status_code=303)
@@ -182,12 +201,27 @@ def audit_log(request: Request, db: Session = Depends(get_db)):
         db.add(AuditEvent(actor_id=user.id, account_id=None, action="audit_view", outcome="refused", details={"reason": "administrator or auditor role required"}))
         db.commit()
         return RedirectResponse("/dashboard?error=Not%20authorized", status_code=303)
-    events = list(db.scalars(select(AuditEvent).order_by(AuditEvent.created_at.desc(), AuditEvent.id.desc()).limit(100)).all())
+    query = select(AuditEvent)
+    if action:
+        query = query.where(AuditEvent.action == action)
+    if outcome in {"succeeded", "refused", "replayed"}:
+        query = query.where(AuditEvent.outcome == outcome)
+    if before_id:
+        query = query.where(AuditEvent.id < before_id)
+    rows = list(db.scalars(query.order_by(AuditEvent.id.desc()).limit(101)).all())
+    has_older = len(rows) > 100
+    events = rows[:100]
     actor_ids = {event.actor_id for event in events}
     account_ids = {event.account_id for event in events if event.account_id}
     actors = {person.id: person.username for person in db.scalars(select(User).where(User.id.in_(actor_ids))).all()} if actor_ids else {}
     accounts = {account.id: account.name for account in db.scalars(select(Account).where(Account.id.in_(account_ids))).all()} if account_ids else {}
-    return templates.TemplateResponse(request=request, name="audit.html", context={"user": user, "session": session, "events": events, "actors": actors, "accounts": accounts})
+    actions = list(db.scalars(select(AuditEvent.action).distinct().order_by(AuditEvent.action)).all())
+    filters = {key: value for key, value in (("action", action), ("outcome", outcome)) if value}
+    older_url = None
+    if has_older and events:
+        older_url = "/audit?" + urlencode({**filters, "before_id": events[-1].id})
+    latest_url = "/audit" + ("?" + urlencode(filters) if filters else "")
+    return templates.TemplateResponse(request=request, name="audit.html", context={"user": user, "session": session, "events": events, "actors": actors, "accounts": accounts, "actions": actions, "action_filter": action or "", "outcome_filter": outcome or "", "older_url": older_url, "latest_url": latest_url})
 
 
 @app.post("/accounts")
