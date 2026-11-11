@@ -1,6 +1,6 @@
 # AI prompt and review log
 
-This record is being kept as work proceeds. Entries describe actual assistance and review in this conversation. The first commit contains the work described below. Do not backdate or invent links. Add later entries as they happen and link each one to the real commit containing that work.
+This record is being kept as work proceeds. Entries describe actual assistance and review in this conversation. Commit links point to the code change being described; they do not imply that every later review note was already present in that commit. Do not backdate or invent links. Add later entries as they happen and link each one to the real commit containing the reviewed correction.
 
 ## 2026-11-06 — Stack and integrity architecture
 
@@ -59,7 +59,9 @@ This record is being kept as work proceeds. Entries describe actual assistance a
 ## 2026-11-06 — PostgreSQL regression verification
 
 - **Asked:** Correct the three failures from the rebuilt integration suite and verify the current test image.
-- **Produced:** Fixed the direct request fixture to include the FastAPI app and corrected the append-only DELETE statements to use valid PostgreSQL syntax.
+- **Produced:** The first rebuilt run exposed a direct-request fixture missing the FastAPI app and append-only DELETE statements using invalid PostgreSQL syntax.
+- **Review finding:** Those were test defects, so the suite could not reliably verify the behavior it claimed to cover.
+- **What I changed:** Added the app to the request scope and used PostgreSQL-valid DELETE statements; reran the suite in the test container.
 - **Verification:** The user rebuilt the image and ran `docker compose --profile test run --build --rm tests`; all 15 tests passed in 0.55 seconds.
 - **Commit:** [8bbe1cd](https://github.com/patrator12/ledgerline-snovasys/commit/8bbe1cd).
 
@@ -70,3 +72,20 @@ This record is being kept as work proceeds. Entries describe actual assistance a
 - **What I changed:** The route now accepts only short ASCII decimal amounts and checks the shared maximum before conversion; added a regression case. The image now runs as an unprivileged user, `.dockerignore` excludes local secrets, and `APP_ENV` can select production cookie and HSTS settings.
 - **Verification:** `python3 -m compileall -q app tests` and `git diff --check` passed. The user rebuilt the image and ran `docker compose --profile test run --build --rm tests`; all 16 tests passed.
 - **Commit:** [583a77a](https://github.com/patrator12/ledgerline-snovasys/commit/583a77a8941612b26bb3e6728190c178f3c2f616).
+
+## 2026-11-06 — Render startup failure review
+
+- **Asked:** Deploy the app using the Render blueprint and Neon database configuration.
+- **Produced:** The first Render start attempted to run the database setup, demo seeding, and Uvicorn command as a single malformed command; Render logged exit code 127 and reported the whole string as not found.
+- **Review finding:** The command override in `render.yaml` was quoted incorrectly for the Docker runtime, so the service never reached its health check.
+- **What I changed:** Removed the Render command override and put the startup sequence in the Docker image command, using Render's supplied `PORT`. The next Render deploy succeeded and `/login` returned HTTP 200.
+- **Commit:** [c029d70](https://github.com/patrator12/ledgerline-snovasys/commit/c029d700d4ccb2699e4225faa26a6f69caead080).
+
+## 2026-11-11 — Authentication, audit, and operations improvements
+
+- **Asked:** Implement the five proposed improvements: broader security tests, shared login throttling, audit filtering and pagination, backup/recovery guidance, and an externally retained audit checkpoint.
+- **Produced:** Added a PostgreSQL-backed per-username/client-address login throttle, audit action/outcome filters with older-page navigation, regression tests, an operations runbook, and a SHA-256 checkpoint command.
+- **Review finding:** A per-pair throttle does not stop distributed guessing; database append-only triggers do not protect against an owner-level rewrite; and the new paths need PostgreSQL integration verification before deployment.
+- **What I changed:** Serialized login attempts for each throttle key, bounded old throttle-row cleanup, documented distributed-attack and storage risks, and made the audit checkpoint verify a stored event prefix so later normal events do not invalidate it.
+- **Verification:** Python compilation and `git diff --check` passed. The PostgreSQL suite could not run because Docker returned `permission denied` for its local API socket; no runtime test result is claimed.
+- **Commit:** [623be73](https://github.com/patrator12/ledgerline-snovasys/commit/623be739f11d61c98edb8425ba975d9e7ae616b4).
