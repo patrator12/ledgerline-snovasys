@@ -3,9 +3,11 @@
 {% block content %}
 <section class="login-shell">
   <div class="login-brand"><span class="brand-mark">L</span><span>LedgerLine</span></div>
+  <div class="login-layout">
+  <div class="login-intro"><p class="eyebrow">TREASURY OPERATIONS</p><h1>Every movement.<br>Accounted for.</h1><p>Review balances, record approved movements, and follow the audit trail in one secure workspace.</p><div class="login-points"><div><span aria-hidden="true">✓</span><span>Permissions checked on the server</span></div><div><span aria-hidden="true">✓</span><span>Requests protected against accidental retries</span></div><div><span aria-hidden="true">✓</span><span>Activity recorded for review</span></div></div><span class="intro-rule"></span><small>Private access for authorized users</small></div>
   <div class="login-panel">
-    <h1>Sign in</h1>
-    <p class="muted">Secure access to your money movement ledger.</p>
+    <p class="eyebrow">WELCOME BACK</p><h2>Sign in</h2>
+    <p class="muted">Use your assigned LedgerLine credentials.</p>
     {% if error %}<div class="notice error" role="alert">{{ error }}</div>{% endif %}
     <form method="post" action="/login" class="stack-form">
       <input type="hidden" name="csrf" value="{{ csrf }}">
@@ -14,6 +16,7 @@
       <button class="button primary full" type="submit">Continue <span>→</span></button>
     </form>
     <p class="login-foot">Every movement is recorded. Every balance is checked.</p>
+  </div>
   </div>
 </section>
 {% endblock %}

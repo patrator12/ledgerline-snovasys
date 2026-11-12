@@ -14,10 +14,10 @@
   <aside class="rail">
     <a class="brand" href="/dashboard" aria-label="LedgerLine overview"><span class="brand-mark">L</span><span>LedgerLine</span></a>
     <nav aria-label="Main navigation">
-      <a class="nav-link active" href="/dashboard"><span class="nav-icon">⌂</span>Overview</a>
-      <a class="nav-link" href="/dashboard#accounts"><span class="nav-icon">▤</span>Accounts</a>
-      <a class="nav-link" href="/dashboard#activity"><span class="nav-icon">↔</span>Activity</a>
-      {% if user.role in ['admin','auditor'] %}<a class="nav-link" href="/audit"><span class="nav-icon">◇</span>Audit log</a>{% else %}<a class="nav-link" href="/dashboard#audit"><span class="nav-icon">◇</span>Audit</a>{% endif %}
+      <a class="nav-link{% if request.url.path == '/dashboard' %} active{% endif %}" href="/dashboard"><span class="nav-icon" aria-hidden="true">⌂</span><span>Overview</span></a>
+      <a class="nav-link" href="/dashboard#accounts"><span class="nav-icon" aria-hidden="true">▤</span><span>Accounts</span></a>
+      <a class="nav-link" href="/dashboard#activity"><span class="nav-icon" aria-hidden="true">↔</span><span>Activity</span></a>
+      {% if user.role in ['admin','auditor'] %}<a class="nav-link{% if request.url.path == '/audit' %} active{% endif %}" href="/audit"><span class="nav-icon" aria-hidden="true">◇</span><span>Audit log</span></a>{% else %}<a class="nav-link" href="/dashboard#audit"><span class="nav-icon" aria-hidden="true">◇</span><span>Audit</span></a>{% endif %}
     </nav>
     <div class="rail-bottom">
       <div class="user-chip"><span class="user-dot">{{ user.username[:1]|upper }}</span><div><strong>{{ user.username }}</strong><small>{{ user.role|title }}</small></div></div>
