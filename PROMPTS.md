@@ -2,6 +2,16 @@
 
 This record is being kept as work proceeds. Entries describe actual assistance and review in this conversation. Commit links point to the code change being described; they do not imply that every later review note was already present in that commit. Do not backdate or invent links. Add later entries as they happen and link each one to the real commit containing the reviewed correction.
 
+## 2026-11-12 — Ledger chain, KYC governance, and STRIDE coverage
+
+- **Asked:** Add the low-disruption improvements previously agreed: a dedicated STRIDE suite, a SHA-256 ledger chain and public verifier, and administrator-managed KYC and account freezing.
+- **Produced:** Added hash-chain fields with one-time legacy backfill, serialized chain appends, `GET /api/ledger/verify`, KYC statuses (`PENDING`/`APPROVED`/`REJECTED`), freeze/unfreeze controls, audited administration routes, and six STRIDE regression tests. Updated the API, README, threat model, operations guide, and demo outline.
+- **Review finding:** The first test run revealed a stale ORM identity-map issue that hid a tampered row from verification, a test fixture that did not load the shared STRIDE fixture, an outdated refusal-message expectation, and a login test request without the FastAPI router.
+- **What I changed:** Refresh verifier query state, made STRIDE tests self-contained, updated the expected audit reason, and bound the login test request to the real FastAPI app. Kept schema migration fail-closed if an existing chain is partially populated or invalid.
+- **Security / audit note:** KYC and freeze transitions require administrator role and CSRF, use row locks to serialize governance changes with movements, and emit audit events. The verifier checks the existing signed-posting model; it is not a general-ledger debit/credit implementation and is O(number of ledger entries).
+- **Verification:** The user ran `docker compose --profile test run --build --rm tests`; all 34 tests passed in 1.40 seconds. Python compilation, Jinja parsing for all five templates, and `git diff --check` passed.
+- **Commit:** [eb350de](https://github.com/patrator12/ledgerline-snovasys/commit/eb350de350f73e938e737175004ab7b1d6b815b4).
+
 ## 2026-11-12 — Requirements gap review and interface refresh
 
 - **Asked:** Check the ten listed security and ledger requirements against the current implementation, and redesign the interface to feel like a finished finance operations application.
