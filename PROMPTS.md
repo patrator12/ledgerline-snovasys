@@ -2,6 +2,15 @@
 
 This record is being kept as work proceeds. Entries describe actual assistance and review in this conversation. Commit links point to the code change being described; they do not imply that every later review note was already present in that commit. Do not backdate or invent links. Add later entries as they happen and link each one to the real commit containing the reviewed correction.
 
+## 2026-11-12 — Split the workspace into focused pages
+
+- **Asked:** Separate the dashboard details into the sections they belong to, then publish the update to the live application.
+- **Produced:** Kept the overview concise and added separate Accounts, Transactions, Activity, and administrator-only Governance pages. Updated role-aware navigation, retained the existing Audit log and account statement pages, and documented the page layout in README.md.
+- **Review finding:** The existing Docker engine is running, but this workspace cannot connect to its Docker socket, even after a targeted access request. The PostgreSQL integration suite therefore could not be rerun here.
+- **What I changed:** Compiled the Python application, parsed all eight Jinja templates, and checked the patch for whitespace errors before committing the implementation.
+- **Verification:** Python compilation, Jinja parsing, and `git diff --check` passed. Docker integration tests and a local browser walkthrough remain unverified.
+- **Commit:** [2bbd802](https://github.com/patrator12/ledgerline-snovasys/commit/2bbd802).
+
 ## 2026-11-12 — Ledger chain, KYC governance, and STRIDE coverage
 
 - **Asked:** Add the low-disruption improvements previously agreed: a dedicated STRIDE suite, a SHA-256 ledger chain and public verifier, and administrator-managed KYC and account freezing.
