@@ -1,0 +1,10 @@
+{% extends "base.html" %}
+{% block title %}Accounts{% endblock %}
+{% block content %}
+<header class="page-heading"><div><p class="eyebrow">LEDGERLINE / ACCOUNTS</p><h1>Accounts</h1><p class="page-description">Balances and statements available to your role.</p></div><span class="quiet">{{ accounts|length }} active account{% if accounts|length != 1 %}s{% endif %}</span></header>
+<section class="section-block"><div class="surface table-wrap">
+{% if accounts %}<table><thead><tr><th>Account</th><th>Currency</th><th>Available balance</th><th>Owner</th><th>Status</th><th>Statement</th></tr></thead><tbody>
+{% for account in accounts %}<tr><td><span class="account-glyph">{{ account.name[:1]|upper }}</span><a class="row-link" href="/accounts/{{ account.id }}">{{ account.name }}</a></td><td>{{ account.currency }}</td><td class="amount-positive">{{ account.balance_paise|money }}</td><td>{% if account.owner_id %}{{ actors.get(account.owner_id, 'Account holder') }}{% else %}Shared{% endif %}</td><td>{% if account.frozen %}<span class="status-refused">Frozen</span>{% else %}Active{% endif %}</td><td><a class="text-link" href="/accounts/{{ account.id }}">Open statement →</a></td></tr>{% endfor %}
+</tbody></table>{% else %}<div class="empty-state"><strong>No accounts available</strong><p>An administrator can create an account when needed.</p></div>{% endif %}
+</div></section>
+{% endblock %}

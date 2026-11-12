@@ -2,6 +2,8 @@
 
 LedgerLine is a small money-movement and audit-ledger challenge project. It uses FastAPI and PostgreSQL for role-checked movements, concurrency control, idempotency, append-only records, and a SHA-256 ledger-entry chain.
 
+The signed-in workspace is organized into separate pages: **Overview** for balances and a short recent-activity summary; **Accounts** for account balances and statements; **Transactions** for protected deposits, withdrawals, and transfers; **Activity** for ledger postings; **Governance** for administrator-only account and KYC controls; and **Audit log** for administrator and auditor review. Navigation only shows pages relevant to the signed-in role, and the server enforces access independently of the interface.
+
 ## Local setup
 
 Requirements: Docker Desktop with Docker Compose.
@@ -89,7 +91,7 @@ This is a challenge prototype, not a production banking service. Ledger entries 
 - app/login_throttle.py: shared PostgreSQL-backed login failure throttling.
 - app/audit_checkpoint.py: point-in-time audit digest generation and verification.
 - app/models.py: database records and relationships.
-- app/main.py: login, statements, dashboard, and money-movement routes.
+- app/main.py: login, role-scoped workspace pages, statements, audit, and money-movement routes.
 - app/init_db.py: schema creation, append-only triggers, and restricted app-role grants.
 - THREATS.md: threat model, controls, and accepted risks.
 - OPERATIONS.md: startup troubleshooting, PostgreSQL backup/recovery, and out-of-band audit checkpoints.

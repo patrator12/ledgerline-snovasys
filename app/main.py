@@ -160,9 +160,61 @@ def dashboard(request: Request, db: Session = Depends(get_db)):
         relevant_ids.add(user.id)
     people = list(db.scalars(select(User).where(User.id.in_(relevant_ids))).all()) if relevant_ids else []
     actors = {person.id: person.username for person in people}
-    holders = list(db.scalars(select(User).where(User.role == "holder").order_by(User.username)).all()) if user.role == "admin" else []
+    return templates.TemplateResponse(request=request, name="dashboard.html", context={"user": user, "session": session, "accounts": accounts, "entries": entries, "actors": actors, "total": sum(a.balance_paise for a in accounts), "notice": request.query_params.get("notice"), "error": request.query_params.get("error")})
+
+
+@app.get("/accounts", response_class=HTMLResponse)
+def account_list(request: Request, db: Session = Depends(get_db)):
+    identity = get_identity(request, db)
+    if not identity:
+        return RedirectResponse("/login", status_code=303)
+    user, session = identity
+    accounts = scoped_accounts(db, user)
+    people = list(db.scalars(select(User).where(User.id.in_([a.owner_id for a in accounts if a.owner_id]))).all()) if accounts else []
+    actors = {person.id: person.username for person in people}
+    return templates.TemplateResponse(request=request, name="accounts.html", context={"user": user, "session": session, "accounts": accounts, "actors": actors})
+
+
+@app.get("/activity", response_class=HTMLResponse)
+def activity(request: Request, db: Session = Depends(get_db)):
+    identity = get_identity(request, db)
+    if not identity:
+        return RedirectResponse("/login", status_code=303)
+    user, session = identity
+    accounts = scoped_accounts(db, user)
+    account_ids = [account.id for account in accounts]
+    entries = list(db.scalars(select(LedgerEntry).where(LedgerEntry.account_id.in_(account_ids)).order_by(LedgerEntry.created_at.desc(), LedgerEntry.id.desc()).limit(100)).all()) if account_ids else []
+    actor_ids = {entry.actor_id for entry in entries}
+    actors = {person.id: person.username for person in db.scalars(select(User).where(User.id.in_(actor_ids))).all()} if actor_ids else {}
+    account_names = {account.id: account.name for account in accounts}
+    return templates.TemplateResponse(request=request, name="activity.html", context={"user": user, "session": session, "accounts": accounts, "entries": entries, "actors": actors, "account_names": account_names})
+
+
+@app.get("/transactions", response_class=HTMLResponse)
+def transaction_page(request: Request, db: Session = Depends(get_db)):
+    identity = get_identity(request, db)
+    if not identity:
+        return RedirectResponse("/login", status_code=303)
+    user, session = identity
+    if user.role not in {"admin", "holder"}:
+        return RedirectResponse("/dashboard?error=Not%20authorized", status_code=303)
+    accounts = scoped_accounts(db, user)
+    return templates.TemplateResponse(request=request, name="transactions.html", context={"user": user, "session": session, "accounts": accounts, "idempotency_key": str(uuid.uuid4()), "notice": request.query_params.get("notice"), "error": request.query_params.get("error")})
+
+
+@app.get("/governance", response_class=HTMLResponse)
+def governance(request: Request, db: Session = Depends(get_db)):
+    identity = get_identity(request, db)
+    if not identity:
+        return RedirectResponse("/login", status_code=303)
+    user, session = identity
+    if user.role != "admin":
+        return RedirectResponse("/dashboard?error=Not%20authorized", status_code=303)
+    accounts = scoped_accounts(db, user)
+    holders = list(db.scalars(select(User).where(User.role == "holder").order_by(User.username)).all())
     eligible_holders = [person for person in holders if person.active and person.kyc_status == "APPROVED"]
-    return templates.TemplateResponse(request=request, name="dashboard.html", context={"user": user, "session": session, "accounts": accounts, "entries": entries, "actors": actors, "holders": holders, "eligible_holders": eligible_holders, "total": sum(a.balance_paise for a in accounts), "notice": request.query_params.get("notice"), "error": request.query_params.get("error"), "idempotency_key": str(uuid.uuid4())})
+    actors = {person.id: person.username for person in holders}
+    return templates.TemplateResponse(request=request, name="governance.html", context={"user": user, "session": session, "accounts": accounts, "holders": holders, "eligible_holders": eligible_holders, "actors": actors, "notice": request.query_params.get("notice"), "error": request.query_params.get("error")})
 
 
 @app.get("/accounts/{account_id}", response_class=HTMLResponse)
