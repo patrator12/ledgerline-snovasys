@@ -2,6 +2,16 @@
 
 This record is being kept as work proceeds. Entries describe actual assistance and review in this conversation. Commit links point to the code change being described; they do not imply that every later review note was already present in that commit. Do not backdate or invent links. Add later entries as they happen and link each one to the real commit containing the reviewed correction.
 
+## 2026-11-12 — Requirements gap review and interface refresh
+
+- **Asked:** Check the ten listed security and ledger requirements against the current implementation, and redesign the interface to feel like a finished finance operations application.
+- **Produced:** Mapped the requirements to the authentication/session, authorization, transaction, ledger, audit, and test code. The comparison found substantial gaps: the app uses Argon2 and opaque server-side sessions (not bcrypt and signed JWT), signed per-account postings with cached balances (not a balanced debit/credit journal), no 24-hour idempotency expiry, no per-entry hash chain or public verification endpoint, no KYC lifecycle/account-freeze workflow, and no dedicated six-threat STRIDE suite. PostgreSQL row locks and transaction boundaries provide concurrency control, and holder ownership is checked server-side.
+- **Review finding:** The existing app must not be presented as satisfying all ten requirements. The existing manual audit checkpoint is not a replacement for a hash chain; the session and posting designs also differ from the requested specification.
+- **What I changed:** Refreshed the shared navigation, overview, movement form, and sign-in layout with responsive, keyboard-focusable styling while preserving existing routes, CSRF fields, role-based controls, and request behavior.
+- **Security / audit note:** Kept the UI copy limited to existing server-checked authorization, idempotent retry handling, and recorded activity; did not imply JWT, chained-ledger, KYC, or verification controls.
+- **Verification:** `git diff --check`, Python compilation, and parsing of all five Jinja templates passed. The local runtime lacks SQLAlchemy and the Docker socket is inaccessible here, so I could not run the app or PostgreSQL integration suite after the interface changes.
+- **Commit:** [047f472](https://github.com/patrator12/ledgerline-snovasys/commit/047f47283c5a8cee1a597a5ee11d8bd5ab9c6a5f).
+
 ## 2026-11-06 — Stack and integrity architecture
 
 - **Asked:** Choose a suitable stack and explain the money-integrity design for the LedgerLine brief.
