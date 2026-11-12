@@ -1,6 +1,6 @@
 # LedgerLine
 
-LedgerLine is a small money-movement and audit-ledger challenge project. It uses FastAPI for the web application and PostgreSQL as the authority for balance updates, idempotency, and append-only records.
+LedgerLine is a small money-movement and audit-ledger challenge project. It uses FastAPI and PostgreSQL for role-checked movements, concurrency control, idempotency, append-only records, and a SHA-256 ledger-entry chain.
 
 ## Local setup
 
@@ -40,9 +40,10 @@ The Docker startup command applies the schema and append-only guards, seeds demo
 ## Money rules
 
 - Amounts are stored as integer paise; no floating point is used for balance arithmetic.
-- Administrators can create accounts, deposit, withdraw, and transfer. New owned accounts can be assigned only to active holders. Account holders can withdraw and transfer only between accounts they own. Auditors can view accounts, statements, and the global audit log but cannot move money.
+- Administrators can create accounts, deposit, withdraw, transfer, review holder KYC status, and freeze or unfreeze accounts. New owned accounts can be assigned only to active, KYC-approved holders. Holders can move funds only when approved and only between accounts they own. Frozen accounts reject all money movements. Auditors can view accounts, statements, and the global audit log but cannot move money or change governance state.
 - Each movement has an actor-scoped idempotency key and a payload hash. Replaying the same key and request returns its saved result; reusing a key with a different request is refused.
 - Money-moving requests lock every involved account row in sorted ID order. The balance check, account balance updates, ledger postings, audit event, and idempotency result commit in one PostgreSQL transaction.
+- Every ledger posting links to the previous posting with a SHA-256 digest. A PostgreSQL transaction advisory lock serializes appends across workers; `GET /api/ledger/verify` checks chain continuity, account balance totals, and equal-and-opposite transfer postings.
 - A transfer writes equal and opposite postings, so its postings sum to zero. Withdrawals and deposits are external movements and change the total by their amount.
 - ledger_entries and audit_events have PostgreSQL triggers that reject updates and deletes. The web app connects as a restricted ledgerline_app role that has insert but no update/delete access to those tables. Schema setup runs using a separate owner connection.
 - Refused movement attempts are recorded with the actor, reason, requested amount, and balance observed while the account row is locked, where the account exists.
@@ -62,9 +63,9 @@ The server applies these checks on each request. UI visibility is not an authori
 1. The route parses the INR amount into integer paise and passes the authenticated user, account IDs, and idempotency key to the money service.
 2. The service hashes the request fields and checks whether this actor/key already has a result. A changed payload under the same key is refused.
 3. It inserts the idempotency record inside the transaction, then locks the existing source and destination rows with SELECT FOR UPDATE in sorted ID order.
-4. After acquiring the locks, it checks account status, role, ownership, and available source balance.
+4. After acquiring the locks, it checks account status, freeze state, role, holder KYC approval, ownership, and available source balance.
 5. If valid, it updates both cached balances, inserts equal-and-opposite ledger postings, writes an audit event, and saves the response on the idempotency record. A matching retry returns that saved response and adds an append-only replay event without posting money again.
-6. One commit makes all those writes visible together. If any database write fails, none of the movement is committed.
+6. Each new ledger posting is linked to the prior hash while holding the chain advisory lock. One commit makes all movement and chain writes visible together. If any database write fails, none of the movement is committed.
 7. If another request has the same actor/key, PostgreSQL's unique constraint makes it wait for the first transaction. It then returns the saved result or, if the first transaction rolled back, can process the request itself.
 
 The account-row lock is the concurrency control: the second withdrawal waits, then reads the committed balance and refuses if the first withdrawal used the available funds. The database check constraint is a second guard against negative cached balances.
@@ -75,15 +76,16 @@ The integration suite starts a separate PostgreSQL container with a temporary fi
 
         docker compose --profile test run --build --rm tests
 
-The tests cover transfer conservation, deposits and withdrawals, retries and concurrent key conflicts, idempotency-key payload conflicts, cross-account access, concurrent withdrawals, account-owner assignment, auditor restrictions, login CSRF and throttling, session expiry, transaction CSRF, invalid account IDs, filtered audit pagination, audit checkpoint stability, audit-log access, amount parsing, and database append-only behavior. Run them against the isolated PostgreSQL test service after changes; they do not share the demo database.
+The tests cover transfer conservation, deposits and withdrawals, retries and concurrent key conflicts, idempotency-key payload conflicts, cross-account access, concurrent withdrawals, account-owner assignment, auditor restrictions, login CSRF and throttling, session expiry, transaction CSRF, invalid account IDs, filtered audit pagination, audit checkpoint stability, ledger-chain verification, KYC and freeze controls, amount parsing, and database append-only behavior. `tests/test_stride.py` adds one regression group for each STRIDE category. Run them against the isolated PostgreSQL test service after changes; they do not share the demo database.
 
 ## Current limits
 
-This is a challenge prototype, not a production banking service. It does not implement MFA, password reset, multi-currency conversion, reversals/refunds, holds, automatic backups, or automatic external audit monitoring. Login throttling is per username/address pair and does not stop distributed guessing. Audit checkpoints detect changes only when the checkpoint file is stored separately with stronger access controls. The auditor view is read-only. Deployment still needs HTTPS and deployment-specific secrets; production cookies switch to Secure and the __Host- prefix when APP_ENV=production.
+This is a challenge prototype, not a production banking service. Ledger entries remain signed account deltas with cached balances rather than a general-ledger debit/credit journal; deposits and withdrawals use external-movement postings. The public verifier scans the full ledger and is intended for challenge-scale data. It does not implement MFA, password reset, multi-currency conversion, reversals/refunds, holds, automatic backups, or continuous external audit monitoring. Login throttling is per username/address pair and does not stop distributed guessing. The manual audit checkpoint detects changes only when its file is stored separately with stronger access controls. The auditor view is read-only. Deployment still needs HTTPS and deployment-specific secrets; production cookies switch to Secure and the __Host- prefix when APP_ENV=production.
 
 ## Project files
 
 - app/money.py: authorization, idempotency, row locks, ledger posting, and refusal audit logic.
+- app/ledger_chain.py: serialized ledger hash-chain appends and public verification checks.
 - app/login_throttle.py: shared PostgreSQL-backed login failure throttling.
 - app/audit_checkpoint.py: point-in-time audit digest generation and verification.
 - app/models.py: database records and relationships.

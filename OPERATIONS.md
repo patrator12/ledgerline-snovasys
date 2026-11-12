@@ -9,7 +9,7 @@ docker compose ps
 docker compose logs --tail=100 web db
 ```
 
-The web container should report that the schema and append-only guards are ready, the demo users are ready, and Uvicorn is listening. If startup stops before that, check database reachability and the values configured for `DATABASE_URL`, `MIGRATION_DATABASE_URL`, and the seed-password variables. Do not print or paste environment values into logs or support messages.
+The web container should report that the schema and append-only guards are ready, the demo users are ready, and Uvicorn is listening. Startup adds the KYC/freeze fields and backfills the ledger hash chain once. If a later startup finds a partially populated or invalid chain, it fails closed; preserve the database and inspect it rather than rebuilding the chain. If startup otherwise stops, check database reachability and the values configured for `DATABASE_URL`, `MIGRATION_DATABASE_URL`, and the seed-password variables. Do not print or paste environment values into logs or support messages.
 
 For Render, inspect the service's deploy and runtime logs. A successful image build does not prove the database connection or startup commands succeeded. Verify the health check at `/login`; only share the relevant error lines, with credentials and connection strings removed.
 
@@ -54,3 +54,13 @@ cat "$HOME/ledgerline-audit-checkpoint.json" | docker compose exec -T web python
 For a hosted database, run the module in an environment with `DATABASE_URL` set to that database and Python dependencies installed. Store the JSON output in a separate, access-controlled location.
 
 The checkpoint hashes every audit event through the recorded event ID, so later legitimate events do not invalidate it. A mismatch means the saved prefix differs from the stored checkpoint. This is a manual checkpoint, not a continuously monitored hash chain; its value depends on retaining the file outside the database with separate access controls.
+
+## Verify ledger integrity
+
+The public verification endpoint scans the ledger and returns chain continuity, cached-balance parity, and transfer-posting parity:
+
+```sh
+curl --fail --silent --show-error http://localhost:8000/api/ledger/verify
+```
+
+For a hosted deployment, use the same path on the service's HTTPS URL. If `valid` is false, preserve the response and stop using the affected ledger until the mismatch is investigated. The endpoint reports aggregate counts and hashes, not account names or balances.

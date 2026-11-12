@@ -14,6 +14,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.config import SESSION_COOKIE, SESSION_TTL_HOURS
+from app.ledger_chain import append_ledger_entries
 from app.models import Account, AuditEvent, IdempotencyRecord, LedgerEntry, User, WebSession
 
 password_hasher = PasswordHash.recommended()
@@ -121,6 +122,10 @@ def move_money(
     idempotency_key: str,
 ) -> MoneyResult:
     """Apply one money movement atomically; accounts are locked in sorted order."""
+    if actor.role == "holder":
+        locked_actor = db.scalar(select(User).where(User.id == actor.id).with_for_update(read=True).execution_options(populate_existing=True))
+        if locked_actor is not None:
+            actor = locked_actor
     if action == "deposit":
         source_id = None
     elif action == "withdrawal":
@@ -194,8 +199,12 @@ def move_money(
         reason = "destination account not found or inactive"
     elif action == "transfer" and (destination is None or not destination.active or destination.id == source_id):
         reason = "destination account not found, inactive, or same as source"
+    elif any(account.frozen for account in accounts):
+        reason = "account is frozen"
     elif actor.role == "holder" and any(a.owner_id != actor.id for a in accounts):
         reason = "account is not owned by this user"
+    elif actor.role == "holder" and actor.kyc_status != "APPROVED":
+        reason = "KYC approval is required before moving funds"
     elif action in {"withdrawal", "transfer"} and source.balance_paise < amount_paise:
         reason = "insufficient funds"
 
@@ -216,8 +225,7 @@ def move_money(
             source.balance_paise -= amount_paise
             destination.balance_paise += amount_paise
             postings = [(source, -amount_paise, "transfer_out"), (destination, amount_paise, "transfer_in")]
-        for account, delta, kind in postings:
-            db.add(LedgerEntry(transfer_id=transfer_id, account_id=account.id, actor_id=actor.id, amount_paise=delta, resulting_balance_paise=account.balance_paise, kind=kind))
+        append_ledger_entries(db, [LedgerEntry(transfer_id=transfer_id, account_id=account.id, actor_id=actor.id, amount_paise=delta, resulting_balance_paise=account.balance_paise, kind=kind) for account, delta, kind in postings])
         db.add(AuditEvent(actor_id=actor.id, account_id=source_id or destination_id, action=action, outcome="succeeded", details={"transfer_id": transfer_id, "amount_paise": amount_paise}))
         result = MoneyResult(True, "succeeded", "Money movement recorded", transfer_id)
 

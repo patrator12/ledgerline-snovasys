@@ -2,6 +2,8 @@
 
 import os
 import hashlib
+import json
+import json
 import threading
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -14,12 +16,13 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.config import SESSION_COOKIE
 from app.database import Base
-from app.init_db import install_append_only_guard, upgrade_audit_outcomes
+from app.init_db import install_append_only_guard, upgrade_audit_outcomes, upgrade_governance_fields, upgrade_ledger_hash_chain
 from app.models import Account, AuditEvent, IdempotencyRecord, LedgerEntry, LoginThrottle, User, WebSession
 from app.money import create_web_session, current_session, hash_password, move_money
-from app.main import app as fastapi_app, audit_log, create_account, login, logout, statement, transact
+from app.main import app as fastapi_app, audit_log, create_account, login, logout, statement, transact, update_kyc, set_account_frozen, ledger_verify
 from app.login_throttle import FAILURE_LIMIT, login_is_blocked, lock_login_bucket, record_login_failure, throttle_key
 from app.audit_checkpoint import checkpoint_digest
+from app.ledger_chain import append_ledger_entries, verify_ledger
 
 
 TEST_DATABASE_URL = os.getenv("TEST_DATABASE_URL")
@@ -35,6 +38,8 @@ def clean_database():
     """These tests only run against the explicitly named disposable test database."""
     Base.metadata.create_all(bind=engine)
     upgrade_audit_outcomes(engine)
+    upgrade_governance_fields(engine)
+    upgrade_ledger_hash_chain(engine)
     with engine.begin() as connection:
         connection.execute(text("TRUNCATE audit_events, ledger_entries, idempotency_records, web_sessions, login_throttles, accounts, users RESTART IDENTITY CASCADE"))
     install_append_only_guard(engine, "ledger_entries")
@@ -45,16 +50,21 @@ def clean_database():
 @pytest.fixture
 def actors_and_accounts():
     with TestingSession() as db:
-        admin = User(username="admin", password_hash="unused", role="admin")
-        holder = User(username="holder", password_hash="unused", role="holder")
-        stranger = User(username="stranger", password_hash="unused", role="holder")
-        auditor = User(username="auditor", password_hash="unused", role="auditor")
+        admin = User(username="admin", password_hash="unused", role="admin", kyc_status="APPROVED")
+        holder = User(username="holder", password_hash="unused", role="holder", kyc_status="APPROVED")
+        stranger = User(username="stranger", password_hash="unused", role="holder", kyc_status="APPROVED")
+        auditor = User(username="auditor", password_hash="unused", role="auditor", kyc_status="APPROVED")
         db.add_all([admin, holder, stranger, auditor])
         db.flush()
         source = Account(name="Source", owner_id=holder.id, balance_paise=10_000)
         destination = Account(name="Destination", owner_id=holder.id, balance_paise=0)
         stranger_account = Account(name="Private", owner_id=stranger.id, balance_paise=5_000)
         db.add_all([source, destination, stranger_account])
+        db.flush()
+        append_ledger_entries(db, [
+            LedgerEntry(transfer_id=str(uuid.uuid4()), account_id=source.id, actor_id=admin.id, amount_paise=10_000, resulting_balance_paise=10_000, kind="opening_balance"),
+            LedgerEntry(transfer_id=str(uuid.uuid4()), account_id=stranger_account.id, actor_id=admin.id, amount_paise=5_000, resulting_balance_paise=5_000, kind="opening_balance"),
+        ])
         db.commit()
         return {"admin": admin.id, "holder": holder.id, "stranger": stranger.id, "auditor": auditor.id,
                 "source": source.id, "destination": destination.id, "private": stranger_account.id}
@@ -214,7 +224,7 @@ def test_account_creation_requires_admin_and_active_holder_owner(actors_and_acco
         assert response.status_code == 303
         assert db.scalar(select(Account.id).where(Account.name == "Invalid auditor account")) is None
         refused_owner = db.scalar(select(AuditEvent).where(AuditEvent.action == "account_create", AuditEvent.outcome == "refused"))
-        assert refused_owner.details["reason"] == "owner must be an active account holder"
+        assert refused_owner.details["reason"] == "owner must be an active, KYC-approved account holder"
         response = create_account(authenticated_request(token), "Valid holder account", ids["holder"], admin_session.csrf_token, db)
         assert response.status_code == 303
         assert db.scalar(select(Account.id).where(Account.name == "Valid holder account")) is not None
@@ -405,9 +415,75 @@ def test_transaction_rejects_extreme_decimal_exponent_before_integer_conversion(
         )
         assert response.status_code == 303
         assert db.scalar(select(Account.balance_paise).where(Account.id == ids["source"])) == 10_000
-        assert db.scalar(select(LedgerEntry.id).where(LedgerEntry.account_id == ids["source"])) is None
+        assert db.scalar(select(LedgerEntry.id).where(LedgerEntry.account_id == ids["source"], LedgerEntry.kind != "opening_balance")) is None
         invalid_amount = db.scalar(select(AuditEvent).where(AuditEvent.actor_id == ids["holder"], AuditEvent.action == "transaction_request", AuditEvent.outcome == "refused"))
         assert invalid_amount.details["reason"] == "invalid amount"
+
+
+def test_ledger_entries_form_a_chain_and_public_endpoint_checks_parity(actors_and_accounts):
+    ids = actors_and_accounts
+    result = run_movement(ids["holder"], action="transfer", amount=2_500, source=ids["source"], destination=ids["destination"], key="chain-test-key-01")
+    assert result.ok
+    with TestingSession() as db:
+        entries = list(db.scalars(select(LedgerEntry).order_by(LedgerEntry.id)).all())
+        assert len(entries) == 4
+        assert entries[0].previous_hash == "0" * 64
+        assert all(entry.previous_hash == entries[index - 1].entry_hash for index, entry in enumerate(entries[1:], 1))
+        assert len([entry for entry in entries if entry.transfer_id == result.transfer_id]) == 2
+        report = json.loads(ledger_verify(db).body)
+        assert report["valid"]
+        assert report["hash_chain"]["valid"]
+        assert report["account_balance_parity"]["valid"]
+        assert report["transfer_posting_parity"]["valid"]
+        db.execute(text("ALTER TABLE ledger_entries DISABLE TRIGGER ledger_entries_append_only"))
+        db.execute(text("UPDATE ledger_entries SET amount_paise = amount_paise + 1 WHERE id = :id"), {"id": entries[0].id})
+        assert not verify_ledger(db)["hash_chain"]["valid"]
+        db.rollback()
+
+
+def test_pending_kyc_holder_cannot_move_funds(actors_and_accounts):
+    ids = actors_and_accounts
+    with TestingSession() as db:
+        holder = db.get(User, ids["holder"])
+        holder.kyc_status = "PENDING"
+        db.commit()
+    result = run_movement(ids["holder"], action="withdrawal", amount=100, source=ids["source"], key="pending-kyc-key-01")
+    assert not result.ok
+    with TestingSession() as db:
+        assert db.scalar(select(Account.balance_paise).where(Account.id == ids["source"])) == 10_000
+        denied = db.scalar(select(AuditEvent).where(AuditEvent.actor_id == ids["holder"], AuditEvent.outcome == "refused"))
+        assert denied.details["reason"] == "KYC approval is required before moving funds"
+
+
+def test_admin_kyc_review_is_csrf_protected_and_audited(actors_and_accounts):
+    ids = actors_and_accounts
+    with TestingSession() as db:
+        admin = db.get(User, ids["admin"])
+        token, session = create_web_session(db, admin)
+        response = update_kyc(ids["holder"], authenticated_request(token, f"/users/{ids['holder']}/kyc"), "REJECTED", session.csrf_token, db)
+        assert response.status_code == 303
+        assert db.get(User, ids["holder"]).kyc_status == "REJECTED"
+        event = db.scalar(select(AuditEvent).where(AuditEvent.action == "kyc_review", AuditEvent.outcome == "succeeded"))
+        assert event.details["previous_status"] == "APPROVED"
+        assert event.details["status"] == "REJECTED"
+
+
+def test_frozen_account_rejects_movement_and_admin_can_unfreeze(actors_and_accounts):
+    ids = actors_and_accounts
+    with TestingSession() as db:
+        admin = db.get(User, ids["admin"])
+        token, session = create_web_session(db, admin)
+        response = set_account_frozen(ids["source"], authenticated_request(token, f"/accounts/{ids['source']}/freeze"), "true", session.csrf_token, db)
+        assert response.status_code == 303
+        assert db.get(Account, ids["source"]).frozen
+    result = run_movement(ids["holder"], action="withdrawal", amount=100, source=ids["source"], key="frozen-account-01")
+    assert not result.ok
+    with TestingSession() as db:
+        admin = db.get(User, ids["admin"])
+        token, session = create_web_session(db, admin)
+        response = set_account_frozen(ids["source"], authenticated_request(token, f"/accounts/{ids['source']}/freeze"), "false", session.csrf_token, db)
+        assert response.status_code == 303
+        assert not db.get(Account, ids["source"]).frozen
 
 
 @pytest.mark.parametrize("table", ["ledger_entries", "audit_events"])

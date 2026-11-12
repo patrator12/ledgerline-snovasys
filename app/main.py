@@ -9,7 +9,7 @@ from typing import Annotated
 from urllib.parse import quote, urlencode
 
 from fastapi import Depends, FastAPI, Form, Query, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import select
@@ -20,6 +20,7 @@ from app.database import get_db
 from app.models import Account, AuditEvent, LedgerEntry, User, WebSession
 from app.money import DUMMY_PASSWORD_HASH, MAX_TRANSACTION_PAISE, create_web_session, current_session, move_money, verify_password
 from app.login_throttle import clear_login_failures, login_is_blocked, lock_login_bucket, record_login_failure, throttle_key
+from app.ledger_chain import verify_ledger
 
 app = FastAPI(title="LedgerLine", docs_url=None, redoc_url=None)
 app.mount("/static", StaticFiles(directory="app/static"), name="static")
@@ -72,6 +73,16 @@ def _record_account_creation_refusal(db: Session, actor: User, reason: str, *, o
         details["requested_owner_id"] = owner_id
     db.add(AuditEvent(actor_id=actor.id, account_id=None, action="account_create", outcome="refused", details=details))
     db.commit()
+
+
+def _record_governance_refusal(db: Session, actor: User, action: str, reason: str) -> None:
+    db.add(AuditEvent(actor_id=actor.id, account_id=None, action=action, outcome="refused", details={"reason": reason}))
+    db.commit()
+
+
+@app.get("/api/ledger/verify")
+def ledger_verify(db: Session = Depends(get_db)):
+    return JSONResponse(verify_ledger(db))
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -149,8 +160,9 @@ def dashboard(request: Request, db: Session = Depends(get_db)):
         relevant_ids.add(user.id)
     people = list(db.scalars(select(User).where(User.id.in_(relevant_ids))).all()) if relevant_ids else []
     actors = {person.id: person.username for person in people}
-    holders = list(db.scalars(select(User).where(User.role == "holder", User.active.is_(True)).order_by(User.username)).all()) if user.role == "admin" else []
-    return templates.TemplateResponse(request=request, name="dashboard.html", context={"user": user, "session": session, "accounts": accounts, "entries": entries, "actors": actors, "holders": holders, "total": sum(a.balance_paise for a in accounts), "notice": request.query_params.get("notice"), "error": request.query_params.get("error"), "idempotency_key": str(uuid.uuid4())})
+    holders = list(db.scalars(select(User).where(User.role == "holder").order_by(User.username)).all()) if user.role == "admin" else []
+    eligible_holders = [person for person in holders if person.active and person.kyc_status == "APPROVED"]
+    return templates.TemplateResponse(request=request, name="dashboard.html", context={"user": user, "session": session, "accounts": accounts, "entries": entries, "actors": actors, "holders": holders, "eligible_holders": eligible_holders, "total": sum(a.balance_paise for a in accounts), "notice": request.query_params.get("notice"), "error": request.query_params.get("error"), "idempotency_key": str(uuid.uuid4())})
 
 
 @app.get("/accounts/{account_id}", response_class=HTMLResponse)
@@ -238,8 +250,8 @@ def create_account(request: Request, name: str = Form(...), owner_id: int | None
     if not name or len(name) > 120:
         _record_account_creation_refusal(db, user, "account name must contain 1–120 characters")
         return RedirectResponse("/dashboard?error=Enter%20an%20account%20name", status_code=303)
-    if owner_id is not None and not db.scalar(select(User.id).where(User.id == owner_id, User.role == "holder", User.active.is_(True))):
-        _record_account_creation_refusal(db, user, "owner must be an active account holder", owner_id=owner_id)
+    if owner_id is not None and not db.scalar(select(User.id).where(User.id == owner_id, User.role == "holder", User.active.is_(True), User.kyc_status == "APPROVED").with_for_update(read=True)):
+        _record_account_creation_refusal(db, user, "owner must be an active, KYC-approved account holder", owner_id=owner_id)
         return RedirectResponse("/dashboard?error=Account%20owner%20not%20found", status_code=303)
     account = Account(name=name, owner_id=owner_id, currency="INR", balance_paise=0)
     db.add(account)
@@ -247,6 +259,59 @@ def create_account(request: Request, name: str = Form(...), owner_id: int | None
     db.add(AuditEvent(actor_id=user.id, account_id=account.id, action="account_create", outcome="succeeded", details={"name": account.name, "owner_id": owner_id}))
     db.commit()
     return RedirectResponse("/dashboard?notice=Account%20created", status_code=303)
+
+
+@app.post("/users/{user_id}/kyc")
+def update_kyc(user_id: int, request: Request, status: str = Form(...), csrf: str = Form(...), db: Session = Depends(get_db)):
+    identity = get_identity(request, db)
+    if not identity:
+        return RedirectResponse("/login", status_code=303)
+    actor, session = identity
+    valid_csrf = csrf_ok(csrf, session)
+    if not valid_csrf or actor.role != "admin":
+        _record_governance_refusal(db, actor, "kyc_review", "invalid CSRF token" if not valid_csrf else "administrator role required")
+        return RedirectResponse("/dashboard?error=Not%20authorized", status_code=303)
+    if status not in {"PENDING", "APPROVED", "REJECTED"}:
+        _record_governance_refusal(db, actor, "kyc_review", "invalid KYC status")
+        return RedirectResponse("/dashboard?error=Invalid%20KYC%20status", status_code=303)
+    subject = db.scalar(select(User).where(User.id == user_id).with_for_update().execution_options(populate_existing=True))
+    if not subject or subject.role != "holder":
+        _record_governance_refusal(db, actor, "kyc_review", "account holder not found")
+        return RedirectResponse("/dashboard?error=Account%20holder%20not%20found", status_code=303)
+    previous = subject.kyc_status
+    subject.kyc_status = status
+    db.add(AuditEvent(actor_id=actor.id, account_id=None, action="kyc_review", outcome="succeeded", details={"subject_user_id": subject.id, "previous_status": previous, "status": status}))
+    db.commit()
+    return RedirectResponse("/dashboard?notice=KYC%20status%20updated", status_code=303)
+
+
+@app.post("/accounts/{account_id}/freeze")
+def set_account_frozen(account_id: str, request: Request, frozen: str = Form(...), csrf: str = Form(...), db: Session = Depends(get_db)):
+    identity = get_identity(request, db)
+    if not identity:
+        return RedirectResponse("/login", status_code=303)
+    actor, session = identity
+    valid_csrf = csrf_ok(csrf, session)
+    if not valid_csrf or actor.role != "admin":
+        _record_governance_refusal(db, actor, "account_freeze", "invalid CSRF token" if not valid_csrf else "administrator role required")
+        return RedirectResponse("/dashboard?error=Not%20authorized", status_code=303)
+    if frozen not in {"true", "false"}:
+        _record_governance_refusal(db, actor, "account_freeze", "invalid freeze state")
+        return RedirectResponse("/dashboard?error=Invalid%20freeze%20state", status_code=303)
+    try:
+        normalized_id = str(uuid.UUID(account_id))
+    except (ValueError, AttributeError):
+        _record_governance_refusal(db, actor, "account_freeze", "invalid account identifier")
+        return RedirectResponse("/dashboard?error=Account%20not%20found", status_code=303)
+    account = db.scalar(select(Account).where(Account.id == normalized_id).with_for_update().execution_options(populate_existing=True))
+    if not account:
+        _record_governance_refusal(db, actor, "account_freeze", "account not found")
+        return RedirectResponse("/dashboard?error=Account%20not%20found", status_code=303)
+    account.frozen = frozen == "true"
+    action = "account_freeze" if account.frozen else "account_unfreeze"
+    db.add(AuditEvent(actor_id=actor.id, account_id=account.id, action=action, outcome="succeeded", details={"frozen": account.frozen}))
+    db.commit()
+    return RedirectResponse("/dashboard?notice=Account%20status%20updated", status_code=303)
 
 
 @app.post("/transactions")

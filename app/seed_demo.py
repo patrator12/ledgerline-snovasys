@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 
 from app.config import MIGRATION_DATABASE_URL
 from app.models import Account, AuditEvent, LedgerEntry, User
+from app.ledger_chain import append_ledger_entries
 from app.money import hash_password
 
 
@@ -22,7 +23,7 @@ def main() -> None:
             username = f"demo-{role}"
             person = db.scalar(select(User).where(User.username == username))
             if not person:
-                person = User(username=username, password_hash=hash_password(password), role=role)
+                person = User(username=username, password_hash=hash_password(password), role=role, kyc_status="APPROVED")
                 db.add(person)
                 db.flush()
             else:
@@ -41,7 +42,7 @@ def main() -> None:
             db.add(account)
             db.flush()
             if balance:
-                db.add(LedgerEntry(transfer_id=str(uuid.uuid4()), account_id=account.id, actor_id=people["admin"].id, amount_paise=balance, resulting_balance_paise=balance, kind="opening_balance"))
+                append_ledger_entries(db, [LedgerEntry(transfer_id=str(uuid.uuid4()), account_id=account.id, actor_id=people["admin"].id, amount_paise=balance, resulting_balance_paise=balance, kind="opening_balance")])
             db.add(AuditEvent(actor_id=people["admin"].id, account_id=account.id, action="account_seed", outcome="succeeded", details={"opening_balance_paise": balance}))
         db.commit()
     print("Demo users are ready: demo-admin, demo-holder, demo-auditor. Passwords are the values supplied in SEED_*_PASSWORD.")

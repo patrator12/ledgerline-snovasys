@@ -13,12 +13,16 @@ def utcnow():
 
 class User(Base):
     __tablename__ = "users"
-    __table_args__ = (CheckConstraint("role IN ('admin', 'holder', 'auditor')", name="ck_user_valid_role"),)
+    __table_args__ = (
+        CheckConstraint("role IN ('admin', 'holder', 'auditor')", name="ck_user_valid_role"),
+        CheckConstraint("kyc_status IN ('PENDING', 'APPROVED', 'REJECTED')", name="ck_user_valid_kyc_status"),
+    )
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     username: Mapped[str] = mapped_column(String(80), unique=True, nullable=False)
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
     role: Mapped[str] = mapped_column(String(16), nullable=False)
     active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    kyc_status: Mapped[str] = mapped_column(String(16), default="PENDING", nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
 
 
@@ -50,6 +54,7 @@ class Account(Base):
     balance_paise: Mapped[int] = mapped_column(BigInteger, default=0, nullable=False)
     owner_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True, index=True)
     active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    frozen: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
 
 
@@ -66,7 +71,11 @@ class IdempotencyRecord(Base):
 
 class LedgerEntry(Base):
     __tablename__ = "ledger_entries"
-    __table_args__ = (CheckConstraint("amount_paise <> 0", name="ck_ledger_nonzero_posting"), CheckConstraint("resulting_balance_paise >= 0", name="ck_ledger_balance_nonnegative"))
+    __table_args__ = (
+        CheckConstraint("amount_paise <> 0", name="ck_ledger_nonzero_posting"),
+        CheckConstraint("resulting_balance_paise >= 0", name="ck_ledger_balance_nonnegative"),
+        Index("uq_ledger_entries_entry_hash", "entry_hash", unique=True),
+    )
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     transfer_id: Mapped[str] = mapped_column(Uuid(as_uuid=False), nullable=False, index=True)
     account_id: Mapped[str] = mapped_column(ForeignKey("accounts.id"), nullable=False, index=True)
@@ -74,6 +83,8 @@ class LedgerEntry(Base):
     amount_paise: Mapped[int] = mapped_column(BigInteger, nullable=False)
     resulting_balance_paise: Mapped[int] = mapped_column(BigInteger, nullable=False)
     kind: Mapped[str] = mapped_column(String(24), nullable=False)
+    previous_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    entry_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
 
 
