@@ -142,3 +142,11 @@ This record is being kept as work proceeds. Entries describe actual assistance a
 - **What I changed:** Persist pip's cache across BuildKit attempts and increased network retries to ten.
 - **Verification:** `git diff --check` passed. The test command cannot run from this session because Docker socket access is denied; the user needs to rerun the build and tests from their terminal.
 - **Commit:** [8eaded9](https://github.com/patrator12/ledgerline-snovasys/commit/8eaded9c62b04c3f2ef76962ab72fd7764910da0).
+
+## 2026-11-13 — Session-cookie integration test correction
+
+- **Asked:** Continue after the rebuilt PostgreSQL suite reported one failure.
+- **Finding:** The app sends separate `Set-Cookie` headers to delete the login CSRF cookie and set the session cookie. The test selected the first header, so it passed an empty token to session validation.
+- **What I changed:** Updated the test to select the cookie named by `SESSION_COOKIE` from all response `Set-Cookie` headers.
+- **Verification:** The submitted run built the image and reported 34 passed, 1 failed in 4.10 seconds. Python compilation and `git diff --check` pass after the test fix; the suite needs a rerun.
+- **Commit:** [b1e7b86](https://github.com/patrator12/ledgerline-snovasys/commit/b1e7b86a9f531eb194a83c819d981118c93082dd).
