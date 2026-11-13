@@ -171,3 +171,10 @@ This record is being kept as work proceeds. Entries describe actual assistance a
 - **Verification:** `python3 -m compileall -q app tests` and `git diff --check` passed. The PostgreSQL suite could not run from this session because the Docker socket is denied; rerun `docker compose --profile test run --build --rm tests` from the project directory before pushing or deploying.
 - **Commit:** [5fb1e68](https://github.com/patrator12/ledgerline-snovasys/commit/5fb1e6883695ba5371a71ca4401b960b6ca9bc2e).
 - **Follow-up verification:** The user rebuilt the Docker image and ran `docker compose --profile test run --build --rm tests`; all 38 tests passed in 4.18 seconds.
+
+## 2026-11-13 — Production login fix verification
+
+- **Finding:** Render logs showed login failing when the app role tried to update `web_sessions.token_hash` after inserting a placeholder row.
+- **Fix:** Build the signed session token and hash before inserting the row; keep the restricted database grants unchanged.
+- **Deployment:** The user set `SESSION_SIGNING_KEY` directly in Render. Commit `d13a13c` deployed successfully, and `/login` returned HTTP 200 with ledger verification valid.
+- **Verification:** The user ran `docker compose --profile test run --build --rm tests`; all 38 tests passed in 4.23 seconds.
