@@ -150,3 +150,4 @@ This record is being kept as work proceeds. Entries describe actual assistance a
 - **What I changed:** Updated the test to select the cookie named by `SESSION_COOKIE` from all response `Set-Cookie` headers.
 - **Verification:** The submitted run built the image and reported 34 passed, 1 failed in 4.10 seconds. Python compilation and `git diff --check` pass after the test fix; the suite needs a rerun.
 - **Commit:** [b1e7b86](https://github.com/patrator12/ledgerline-snovasys/commit/b1e7b86a9f531eb194a83c819d981118c93082dd).
+- **Follow-up verification:** The user rebuilt and reran `docker compose --profile test run --build --rm tests` after the cookie-header test fix; all 35 tests passed in 4.06 seconds.
