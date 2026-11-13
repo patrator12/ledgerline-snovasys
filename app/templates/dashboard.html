@@ -8,7 +8,7 @@
 {% if notice %}<div class="notice success" role="status">{{ notice }}</div>{% endif %}
 {% if error %}<div class="notice error" role="alert">{{ error }}</div>{% endif %}
 <section class="overview-hero" aria-label="Balance overview">
-  <div class="hero-copy"><p class="label">Total available balance</p><p class="total">{{ total|money }}</p><p class="muted">Across {{ accounts|length }} active account{% if accounts|length != 1 %}s{% endif %}</p></div>
+  <div class="hero-copy"><p class="label">Total account balance</p><p class="total">{{ total|money }}</p><p class="muted">Across {{ accounts|length }} active account{% if accounts|length != 1 %}s{% endif %}</p></div>
   <div class="hero-aside"><div class="top-meta"><span class="live-dot"></span>Updated for this view</div>{% if user.role in ['admin','holder'] %}<a class="button primary" href="/transactions">New transaction <span aria-hidden="true">→</span></a>{% endif %}</div>
 </section>
 <section class="section-block">

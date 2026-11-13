@@ -11,6 +11,7 @@ from types import SimpleNamespace
 
 import pytest
 from starlette.requests import Request
+from pwdlib.hashers.argon2 import Argon2Hasher
 from sqlalchemy import create_engine, select, text
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -18,7 +19,7 @@ from app.config import SESSION_COOKIE
 from app.database import Base
 from app.init_db import install_append_only_guard, upgrade_audit_outcomes, upgrade_governance_fields, upgrade_ledger_hash_chain
 from app.models import Account, AuditEvent, IdempotencyRecord, LedgerEntry, LoginThrottle, User, WebSession
-from app.money import create_web_session, current_session, hash_password, move_money
+from app.money import create_web_session, current_session, hash_password, move_money, verify_password
 from app.main import app as fastapi_app, audit_log, create_account, login, logout, statement, transact, update_kyc, set_account_frozen, ledger_verify
 from app.login_throttle import FAILURE_LIMIT, login_is_blocked, lock_login_bucket, record_login_failure, throttle_key
 from app.audit_checkpoint import checkpoint_digest
@@ -321,6 +322,27 @@ def test_login_requires_csrf_and_success_creates_session(actors_and_accounts):
         )
         token = session_cookie.split("=", 1)[1].split(";", 1)[0]
         assert current_session(db, authenticated_request(token, "/dashboard", "GET"))[0].id == admin.id
+
+
+def test_legacy_argon_password_over_bcrypt_limit_can_still_sign_in(actors_and_accounts):
+    password = "x" * 80
+    with TestingSession() as db:
+        admin = db.get(User, actors_and_accounts["admin"])
+        legacy_hash = Argon2Hasher().hash(password)
+        admin.password_hash = legacy_hash
+        db.commit()
+
+        csrf = "matching-cookie-token"
+        accepted = login(login_request(csrf), "admin", password, csrf, db)
+
+        assert accepted.status_code == 303
+        assert admin.password_hash == legacy_hash
+        assert verify_password(password, legacy_hash)
+
+
+def test_bcrypt_rejects_passwords_over_72_utf8_bytes(actors_and_accounts):
+    with pytest.raises(ValueError, match="72 bytes"):
+        hash_password("é" * 37)
 
 
 def test_login_throttle_blocks_after_five_bad_passwords(actors_and_accounts):

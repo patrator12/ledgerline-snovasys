@@ -121,7 +121,7 @@ def login(request: Request, username: str = Form(..., max_length=80), password: 
     if not user or not user.active or not valid_password:
         record_login_failure(db, key_hash)
         return templates.TemplateResponse(request=request, name="login.html", context={"csrf": cookie_token, "error": "Username or password was not accepted."}, status_code=401)
-    if not user.password_hash.startswith(("$2a$", "$2b$", "$2y$")):
+    if not user.password_hash.startswith(("$2a$", "$2b$", "$2y$")) and len(password.encode()) <= 72:
         user.password_hash = hash_password(password)
         db.commit()
     clear_login_failures(db, key_hash)

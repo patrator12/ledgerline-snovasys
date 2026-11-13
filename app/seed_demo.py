@@ -16,6 +16,10 @@ def main() -> None:
         "holder": os.environ["SEED_HOLDER_PASSWORD"],
         "auditor": os.environ["SEED_AUDITOR_PASSWORD"],
     }
+    oversized = [role for role, password in credentials.items() if len(password.encode()) > 72]
+    if oversized:
+        names = ", ".join(f"SEED_{role.upper()}_PASSWORD" for role in oversized)
+        raise ValueError(f"Bcrypt passwords must be at most 72 UTF-8 bytes: {names}")
     engine = create_engine(MIGRATION_DATABASE_URL, pool_pre_ping=True)
     with Session(engine) as db:
         people = {}

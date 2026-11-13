@@ -22,7 +22,7 @@ Requirements: Docker Desktop with Docker Compose.
 | Account holder | demo-holder | SEED_HOLDER_PASSWORD |
 | Read-only auditor | demo-auditor | SEED_AUDITOR_PASSWORD |
 
-The sample records include two holder-owned accounts, with opening balances recorded in the ledger, and one shared settlement account. The passwords are never stored in this repository. Do not use local demo credentials for a public deployment.
+The sample records include two holder-owned accounts, with opening balances recorded in the ledger, and one shared settlement account. Seed passwords must be no more than 72 UTF-8 bytes for bcrypt. The passwords are never stored in this repository. Do not use local demo credentials for a public deployment.
 
 The container runs as an unprivileged user. For an HTTPS deployment, set `APP_ENV=production` in the deployment environment so session cookies become Secure and the app adds HSTS. Login failures are throttled in PostgreSQL: five bad passwords for the same username and client address in 15 minutes block that pair for 15 minutes. The shared database counter works across app instances; distributed attempts from different addresses can still evade it. Throttle keys store a SHA-256 digest instead of raw username/address values, and up to 100 buckets idle for seven days are pruned during successful or failed credential checks.
 
@@ -36,7 +36,7 @@ The live Render deployment is [ledgerline-snovasys.onrender.com](https://ledgerl
 - `MIGRATION_DATABASE_URL`: direct PostgreSQL owner URL used for schema setup and demo seeding.
 - `SEED_ADMIN_PASSWORD`, `SEED_HOLDER_PASSWORD`, and `SEED_AUDITOR_PASSWORD`: passwords for the three demo users.
 - `APP_ENV=production`: enables Secure `__Host-` session cookies and HSTS.
-- `SESSION_SIGNING_KEY` (optional): dedicated signing key for JWT sessions. If omitted, the app derives it from the private database URL; setting an independent random secret makes key rotation and incident response clearer.
+- `SESSION_SIGNING_KEY` (recommended): independent random secret of at least 32 bytes for JWT sessions. Generate it with `openssl rand -hex 32` and set it in Render's environment settings. Changing it revokes existing sessions. If unset, the app derives the key from the private database URL.
 
 The Docker startup command applies the schema and append-only guards, seeds demo accounts, then starts Uvicorn on Render's `PORT`. Keep database URLs and passwords in the hosting provider's secret settings; never commit them or place live passwords in this README. Demo passwords are not published here.
 
@@ -51,7 +51,7 @@ The Docker startup command applies the schema and append-only guards, seeds demo
 - A transfer writes equal DEBIT and CREDIT postings. Withdrawals and deposits use a paired `EXTERNAL_CLEARING` posting and change the total held in customer accounts by their amount.
 - ledger_entries and audit_events have PostgreSQL triggers that reject updates and deletes. The web app connects as a restricted ledgerline_app role that has insert but no update/delete access to those tables. Schema setup runs using a separate owner connection.
 - Refused movement attempts are recorded with the actor, reason, requested amount, and balance observed while the account row is locked, where the account exists.
-- Passwords use bcrypt for new hashes; existing Argon2 hashes upgrade to bcrypt at the next successful login. Browser sessions are signed HS256 JWTs with an HttpOnly cookie and server-side session record so logout can revoke them. The signing key can be set with `SESSION_SIGNING_KEY`; otherwise it is derived from the private database URL.
+- Passwords use bcrypt for new hashes up to 72 UTF-8 bytes; existing Argon2 hashes upgrade to bcrypt at the next successful login when they fit that limit. Longer legacy Argon2 passwords remain valid. Browser sessions are signed HS256 JWTs with an HttpOnly cookie and server-side session record so logout can revoke them.
 
 ## Roles
 
@@ -81,7 +81,7 @@ The integration suite starts a separate PostgreSQL container with a temporary fi
 
         docker compose --profile test run --build --rm tests
 
-The tests cover balanced debit/credit postings and transfer conservation, deposits and withdrawals, 24-hour retry expiry and concurrent key conflicts, idempotency payload conflicts, cross-account access, concurrent withdrawals, account-owner assignment, auditor restrictions, login CSRF and throttling, signed-session login and expiry, transaction CSRF, invalid account IDs, filtered audit pagination, audit checkpoint stability, ledger-chain verification, KYC and freeze controls, amount parsing, and database append-only behavior. `tests/test_stride.py` adds one regression group for each STRIDE category. The latest recorded Docker PostgreSQL run passed all 35 tests; rerun the suite after changes.
+The tests cover balanced debit/credit postings, legacy-ledger migration, deposits and withdrawals, 24-hour retry expiry and concurrent key conflicts, idempotency payload conflicts, cross-account access, concurrent withdrawals, account-owner assignment, auditor restrictions, bcrypt's byte limit and legacy Argon2 login, login CSRF and throttling, signed-session login and expiry, transaction CSRF, invalid account IDs, filtered audit pagination, audit checkpoint stability, ledger-chain verification, KYC and freeze controls, amount parsing, and database append-only behavior. `tests/test_stride.py` adds one regression group for each STRIDE category. Run the Docker PostgreSQL suite after changes.
 
 ## Current limits
 

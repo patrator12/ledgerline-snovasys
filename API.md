@@ -5,7 +5,7 @@ All application routes are same-origin HTML routes. Authenticated POST routes us
 | Method and route | Access | Behavior and money effect |
 | --- | --- | --- |
 | GET /login | Public | Issues a short-lived login CSRF cookie and renders the sign-in form. |
-| POST /login | Public + login CSRF | Verifies bcrypt hashes and upgrades legacy Argon2 hashes after successful login. Creates an HS256-signed JWT with a server-side revocation record. Five failed passwords for the same username/client-address pair within 15 minutes cause a 15-minute block; blocked attempts return 429 and `Retry-After`. |
+| POST /login | Public + login CSRF | Verifies bcrypt hashes and upgrades legacy Argon2 hashes after successful login when the password fits bcrypt's 72-byte limit. Longer existing Argon2 passwords remain valid. Creates an HS256-signed JWT with a server-side revocation record. Five failed passwords for the same username/client-address pair within 15 minutes cause a 15-minute block; blocked attempts return 429 and `Retry-After`. |
 | GET /api/ledger/verify | Public | Recomputes the ledger SHA-256 chain, compares each account balance to its debit/credit posting total, and checks that every transfer group balances. Returns only verification status and aggregate counts. |
 | POST /logout | Authenticated + session CSRF | Deletes the current server-side session. |
 | GET /dashboard | Authenticated | Shows only owned accounts to holders; administrators and auditors can view all accounts. Shows recent successful ledger postings. |

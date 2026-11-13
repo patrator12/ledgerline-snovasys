@@ -34,7 +34,7 @@ def hash_password(password: str) -> str:
 
 def verify_password(password: str, encoded: str) -> bool:
     try:
-        if len(password.encode()) > 72:
+        if encoded.startswith(("$2a$", "$2b$", "$2y$")) and len(password.encode()) > 72:
             return False
         return password_hasher.verify(password, encoded)
     except Exception:

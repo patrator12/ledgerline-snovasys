@@ -8,6 +8,8 @@ services:
     envVars:
       - key: APP_ENV
         value: production
+      - key: SESSION_SIGNING_KEY
+        sync: false
       - key: DATABASE_URL
         sync: false
       - key: MIGRATION_DATABASE_URL
