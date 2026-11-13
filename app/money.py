@@ -47,13 +47,11 @@ def create_web_session(db: Session, user: User) -> tuple[str, WebSession]:
     csrf_token = secrets.token_urlsafe(32)
     row = WebSession(
         id=secrets.token_hex(16),
-        token_hash="pending",
+        token_hash="",
         user_id=user.id,
         csrf_token=csrf_token,
         expires_at=expires,
     )
-    db.add(row)
-    db.flush()
     payload = {"sub": str(user.id), "jti": row.id, "csrf": csrf_token, "iat": int(now.timestamp()), "exp": int(expires.timestamp())}
     header = _b64url(json.dumps({"alg": "HS256", "typ": "JWT"}, separators=(",", ":")).encode())
     body = _b64url(json.dumps(payload, separators=(",", ":")).encode())
@@ -61,6 +59,7 @@ def create_web_session(db: Session, user: User) -> tuple[str, WebSession]:
     signature = _b64url(hmac.new(SESSION_SIGNING_KEY.encode(), signing_input.encode(), hashlib.sha256).digest())
     raw = f"{signing_input}.{signature}"
     row.token_hash = hashlib.sha256(raw.encode()).hexdigest()
+    db.add(row)
     db.commit()
     return raw, row
 
