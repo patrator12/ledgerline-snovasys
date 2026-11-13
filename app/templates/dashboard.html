@@ -25,7 +25,7 @@
   <div class="section-head"><div><p class="eyebrow">LATEST</p><h2>Recent activity</h2></div><a class="text-link" href="/activity">View all activity →</a></div>
   <div class="surface table-wrap">
   {% if entries %}<table><thead><tr><th>Time</th><th>Reference</th><th>Account</th><th>Type</th><th>Initiated by</th><th class="align-right">Amount</th></tr></thead><tbody>
-    {% for entry in entries[:5] %}<tr><td class="date-cell">{{ entry.created_at.strftime('%d %b %Y · %H:%M') }}</td><td class="mono">{{ entry.transfer_id[:8] }}</td><td>{% for account in accounts %}{% if account.id == entry.account_id %}{{ account.name }}{% endif %}{% endfor %}</td><td>{{ entry.kind|replace('_',' ')|title }}</td><td>{{ actors.get(entry.actor_id, 'Unknown') }}</td><td class="align-right {% if entry.amount_paise > 0 %}amount-positive{% else %}amount-negative{% endif %}">{{ entry.amount_paise|money }}</td></tr>{% endfor %}
+    {% for entry in entries[:5] %}<tr><td class="date-cell">{{ entry.created_at.strftime('%d %b %Y · %H:%M') }}</td><td class="mono">{{ entry.transfer_id[:8] }}</td><td>{% for account in accounts %}{% if account.id == entry.account_id %}{{ account.name }}{% endif %}{% endfor %}</td><td>{{ entry.kind|replace('_',' ')|title }} · {{ entry.side|title }}</td><td>{{ actors.get(entry.actor_id, 'Unknown') }}</td><td class="align-right">{{ entry.amount_paise|money }}</td></tr>{% endfor %}
   </tbody></table>{% else %}<div class="empty-state"><strong>No activity yet</strong><p>Successful ledger postings will appear here.</p></div>{% endif %}
   </div>
 </section>

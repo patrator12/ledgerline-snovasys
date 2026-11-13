@@ -50,10 +50,11 @@ def actors_and_accounts():
         private = Account(name="Stride private", owner_id=stranger.id, balance_paise=5_000)
         db.add_all([source, destination, private])
         db.flush()
-        append_ledger_entries(db, [
-            LedgerEntry(transfer_id=str(uuid.uuid4()), account_id=source.id, actor_id=admin.id, amount_paise=10_000, resulting_balance_paise=10_000, kind="opening_balance"),
-            LedgerEntry(transfer_id=str(uuid.uuid4()), account_id=private.id, actor_id=admin.id, amount_paise=5_000, resulting_balance_paise=5_000, kind="opening_balance"),
-        ])
+        entries = []
+        for account, amount in ((source, 10_000), (private, 5_000)):
+            transfer_id = str(uuid.uuid4())
+            entries.extend([LedgerEntry(transfer_id=transfer_id, account_id=account.id, actor_id=admin.id, amount_paise=amount, side="DEBIT", resulting_balance_paise=amount, kind="opening_balance"), LedgerEntry(transfer_id=transfer_id, account_id=None, actor_id=admin.id, amount_paise=amount, side="CREDIT", contra_account="EXTERNAL_CLEARING", resulting_balance_paise=0, kind="opening_balance")])
+        append_ledger_entries(db, entries)
         db.commit()
         return {"admin": admin.id, "holder": holder.id, "stranger": stranger.id, "auditor": auditor.id,
                 "source": source.id, "destination": destination.id, "private": private.id}

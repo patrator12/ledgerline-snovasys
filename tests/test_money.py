@@ -61,10 +61,11 @@ def actors_and_accounts():
         stranger_account = Account(name="Private", owner_id=stranger.id, balance_paise=5_000)
         db.add_all([source, destination, stranger_account])
         db.flush()
-        append_ledger_entries(db, [
-            LedgerEntry(transfer_id=str(uuid.uuid4()), account_id=source.id, actor_id=admin.id, amount_paise=10_000, resulting_balance_paise=10_000, kind="opening_balance"),
-            LedgerEntry(transfer_id=str(uuid.uuid4()), account_id=stranger_account.id, actor_id=admin.id, amount_paise=5_000, resulting_balance_paise=5_000, kind="opening_balance"),
-        ])
+        openings = []
+        for account, amount in ((source, 10_000), (stranger_account, 5_000)):
+            transfer_id = str(uuid.uuid4())
+            openings.extend([LedgerEntry(transfer_id=transfer_id, account_id=account.id, actor_id=admin.id, amount_paise=amount, side="DEBIT", resulting_balance_paise=amount, kind="opening_balance"), LedgerEntry(transfer_id=transfer_id, account_id=None, actor_id=admin.id, amount_paise=amount, side="CREDIT", contra_account="EXTERNAL_CLEARING", resulting_balance_paise=0, kind="opening_balance")])
+        append_ledger_entries(db, openings)
         db.commit()
         return {"admin": admin.id, "holder": holder.id, "stranger": stranger.id, "auditor": auditor.id,
                 "source": source.id, "destination": destination.id, "private": stranger_account.id}
@@ -107,7 +108,7 @@ def test_transfer_balances_both_accounts_and_conserves_total(actors_and_accounts
         assert source.balance_paise == 6_750
         assert destination.balance_paise == 3_250
         assert source.balance_paise + destination.balance_paise == before
-        assert sum(item.amount_paise for item in postings) == 0
+        assert sum(item.amount_paise for item in postings if item.side == "DEBIT") == sum(item.amount_paise for item in postings if item.side == "CREDIT")
 
 
 def test_external_deposit_and_withdrawal_change_total_by_their_amount(actors_and_accounts):
@@ -133,6 +134,18 @@ def test_replayed_idempotency_key_returns_original_result_without_second_posting
         assert len(replay_events) == 1
         assert replay_events[0].details["original_transfer_id"] == first.transfer_id
         assert len(replay_events[0].details["key_fingerprint"]) == 16
+
+
+def test_idempotency_key_can_be_reused_after_24_hours(actors_and_accounts):
+    ids = actors_and_accounts
+    first = run_movement(ids["holder"], action="transfer", amount=100, source=ids["source"], destination=ids["destination"], key="expires-key-0001")
+    with TestingSession() as db:
+        record = db.scalar(select(IdempotencyRecord).where(IdempotencyRecord.key == "expires-key-0001"))
+        record.created_at = datetime.now(timezone.utc) - timedelta(hours=25)
+        db.commit()
+    second = run_movement(ids["holder"], action="transfer", amount=100, source=ids["source"], destination=ids["destination"], key="expires-key-0001")
+    assert first.ok and second.ok and not second.replayed
+    assert first.transfer_id != second.transfer_id
 
 
 def test_reusing_key_for_different_payload_is_refused(actors_and_accounts):
@@ -299,7 +312,11 @@ def test_login_requires_csrf_and_success_creates_session(actors_and_accounts):
         accepted = login(login_request(csrf), "admin", "correct horse battery staple", csrf, db)
         assert accepted.status_code == 303
         assert accepted.headers["location"] == "/dashboard"
-        assert db.scalar(select(WebSession.id).where(WebSession.user_id == admin.id)) is not None
+        session = db.scalar(select(WebSession).where(WebSession.user_id == admin.id))
+        assert session is not None
+        assert session.token_hash != "pending"
+        token = accepted.headers["set-cookie"].split("=", 1)[1].split(";", 1)[0]
+        assert current_session(db, authenticated_request(token, "/dashboard", "GET"))[0].id == admin.id
 
 
 def test_login_throttle_blocks_after_five_bad_passwords(actors_and_accounts):
@@ -426,7 +443,7 @@ def test_ledger_entries_form_a_chain_and_public_endpoint_checks_parity(actors_an
     assert result.ok
     with TestingSession() as db:
         entries = list(db.scalars(select(LedgerEntry).order_by(LedgerEntry.id)).all())
-        assert len(entries) == 4
+        assert len(entries) == 6
         assert entries[0].previous_hash == "0" * 64
         assert all(entry.previous_hash == entries[index - 1].entry_hash for index, entry in enumerate(entries[1:], 1))
         assert len([entry for entry in entries if entry.transfer_id == result.transfer_id]) == 2

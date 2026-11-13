@@ -21,9 +21,11 @@ def ledger_entry_digest(entry: LedgerEntry, previous_hash: str) -> str:
         "version": 1,
         "previous_hash": previous_hash,
         "transfer_id": str(entry.transfer_id),
-        "account_id": str(entry.account_id),
+        "account_id": str(entry.account_id) if entry.account_id else None,
         "actor_id": entry.actor_id,
         "amount_paise": entry.amount_paise,
+        "side": entry.side,
+        "contra_account": entry.contra_account,
         "resulting_balance_paise": entry.resulting_balance_paise,
         "kind": entry.kind,
         "created_at": created_at.astimezone(timezone.utc).isoformat(timespec="microseconds"),
@@ -38,7 +40,7 @@ def append_ledger_entries(db: Session, entries: list[LedgerEntry]) -> None:
     connection = db.connection()
     connection.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": CHAIN_LOCK_KEY})
     previous_hash = connection.execute(text("SELECT entry_hash FROM ledger_entries ORDER BY id DESC LIMIT 1")).scalar_one_or_none() or GENESIS_HASH
-    for entry in sorted(entries, key=lambda row: (row.account_id, row.kind)):
+    for entry in sorted(entries, key=lambda row: (row.account_id or "", row.kind)):
         if entry.created_at is None:
             entry.created_at = datetime.now(timezone.utc)
         entry.previous_hash = previous_hash
@@ -51,9 +53,8 @@ def append_ledger_entries(db: Session, entries: list[LedgerEntry]) -> None:
 def verify_ledger(db: Session) -> dict:
     from app.models import Account
 
-    rows = db.execute(select(Account, LedgerEntry).outerjoin(LedgerEntry, Account.id == LedgerEntry.account_id).order_by(LedgerEntry.id).execution_options(populate_existing=True)).all()
-    accounts = {account.id: account for account, _entry in rows}
-    entries = [entry for _account, entry in rows if entry is not None]
+    accounts = {account.id: account for account in db.scalars(select(Account).execution_options(populate_existing=True)).all()}
+    entries = list(db.scalars(select(LedgerEntry).order_by(LedgerEntry.id).execution_options(populate_existing=True)).all())
     expected_previous = GENESIS_HASH
     chain_valid = True
     balance_totals: dict[str, int] = {}
@@ -62,15 +63,16 @@ def verify_ledger(db: Session) -> dict:
         if entry.previous_hash != expected_previous or entry.entry_hash != ledger_entry_digest(entry, entry.previous_hash):
             chain_valid = False
         expected_previous = entry.entry_hash
-        balance_totals[entry.account_id] = balance_totals.get(entry.account_id, 0) + entry.amount_paise
+        if entry.account_id:
+            signed_amount = entry.amount_paise if entry.side == "DEBIT" else -entry.amount_paise
+            balance_totals[entry.account_id] = balance_totals.get(entry.account_id, 0) + signed_amount
         transfers.setdefault(str(entry.transfer_id), []).append(entry)
 
     balance_mismatches = sum(account.balance_paise != balance_totals.get(account_id, 0) for account_id, account in accounts.items())
-    transfer_groups = [rows for rows in transfers.values() if any(row.kind in {"transfer_in", "transfer_out"} for row in rows)]
+    transfer_groups = list(transfers.values())
     transfer_mismatches = sum(
         len(rows) != 2
-        or {row.kind for row in rows} != {"transfer_in", "transfer_out"}
-        or sum(row.amount_paise for row in rows) != 0
+        or sum(row.amount_paise for row in rows if row.side == "DEBIT") != sum(row.amount_paise for row in rows if row.side == "CREDIT")
         for rows in transfer_groups
     )
     balances_valid = balance_mismatches == 0

@@ -41,14 +41,16 @@ The Docker startup command applies the schema and append-only guards, seeds demo
 
 ## Money rules
 
-- Amounts are stored as integer paise; no floating point is used for balance arithmetic.
+- Amounts are stored as positive integer paise in explicit `DEBIT` and `CREDIT` postings; no floating point is used for balance arithmetic. Every transfer has equal debit and credit totals. Deposits, withdrawals, and opening balances pair account postings with the `EXTERNAL_CLEARING` contra account.
 - Administrators can create accounts, deposit, withdraw, transfer, review holder KYC status, and freeze or unfreeze accounts. New owned accounts can be assigned only to active, KYC-approved holders. Holders can move funds only when approved and only between accounts they own. Frozen accounts reject all money movements. Auditors can view accounts, statements, and the global audit log but cannot move money or change governance state.
 - Each movement has an actor-scoped idempotency key and a payload hash. Replaying the same key and request returns its saved result; reusing a key with a different request is refused.
+- Idempotency results expire after 24 hours. Reuse after expiry is treated as a new request.
 - Money-moving requests lock every involved account row in sorted ID order. The balance check, account balance updates, ledger postings, audit event, and idempotency result commit in one PostgreSQL transaction.
 - Every ledger posting links to the previous posting with a SHA-256 digest. A PostgreSQL transaction advisory lock serializes appends across workers; `GET /api/ledger/verify` checks chain continuity, account balance totals, and equal-and-opposite transfer postings.
 - A transfer writes equal and opposite postings, so its postings sum to zero. Withdrawals and deposits are external movements and change the total by their amount.
 - ledger_entries and audit_events have PostgreSQL triggers that reject updates and deletes. The web app connects as a restricted ledgerline_app role that has insert but no update/delete access to those tables. Schema setup runs using a separate owner connection.
 - Refused movement attempts are recorded with the actor, reason, requested amount, and balance observed while the account row is locked, where the account exists.
+- Passwords use bcrypt for new hashes; existing Argon2 hashes upgrade to bcrypt at the next successful login. Browser sessions are signed HS256 JWTs with an HttpOnly cookie and server-side session record so logout can revoke them. The signing key can be set with `SESSION_SIGNING_KEY`; otherwise it is derived from the private database URL.
 
 ## Roles
 
@@ -78,7 +80,7 @@ The integration suite starts a separate PostgreSQL container with a temporary fi
 
         docker compose --profile test run --build --rm tests
 
-The tests cover transfer conservation, deposits and withdrawals, retries and concurrent key conflicts, idempotency-key payload conflicts, cross-account access, concurrent withdrawals, account-owner assignment, auditor restrictions, login CSRF and throttling, session expiry, transaction CSRF, invalid account IDs, filtered audit pagination, audit checkpoint stability, ledger-chain verification, KYC and freeze controls, amount parsing, and database append-only behavior. `tests/test_stride.py` adds one regression group for each STRIDE category. Run them against the isolated PostgreSQL test service after changes; they do not share the demo database.
+The tests cover balanced debit/credit postings and transfer conservation, deposits and withdrawals, 24-hour retry expiry and concurrent key conflicts, idempotency payload conflicts, cross-account access, concurrent withdrawals, account-owner assignment, auditor restrictions, login CSRF and throttling, signed session expiry, transaction CSRF, invalid account IDs, filtered audit pagination, audit checkpoint stability, ledger-chain verification, KYC and freeze controls, amount parsing, and database append-only behavior. `tests/test_stride.py` adds one regression group for each STRIDE category. Run them against the isolated PostgreSQL test service after changes; they do not share the demo database.
 
 ## Current limits
 

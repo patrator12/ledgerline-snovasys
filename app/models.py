@@ -72,15 +72,18 @@ class IdempotencyRecord(Base):
 class LedgerEntry(Base):
     __tablename__ = "ledger_entries"
     __table_args__ = (
-        CheckConstraint("amount_paise <> 0", name="ck_ledger_nonzero_posting"),
+        CheckConstraint("amount_paise > 0", name="ck_ledger_positive_posting"),
+        CheckConstraint("side IN ('DEBIT', 'CREDIT')", name="ck_ledger_valid_side"),
         CheckConstraint("resulting_balance_paise >= 0", name="ck_ledger_balance_nonnegative"),
         Index("uq_ledger_entries_entry_hash", "entry_hash", unique=True),
     )
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     transfer_id: Mapped[str] = mapped_column(Uuid(as_uuid=False), nullable=False, index=True)
-    account_id: Mapped[str] = mapped_column(ForeignKey("accounts.id"), nullable=False, index=True)
+    account_id: Mapped[str | None] = mapped_column(ForeignKey("accounts.id"), nullable=True, index=True)
     actor_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
     amount_paise: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    side: Mapped[str] = mapped_column(String(6), nullable=False, default="DEBIT")
+    contra_account: Mapped[str | None] = mapped_column(String(32), nullable=True)
     resulting_balance_paise: Mapped[int] = mapped_column(BigInteger, nullable=False)
     kind: Mapped[str] = mapped_column(String(24), nullable=False)
     previous_hash: Mapped[str] = mapped_column(String(64), nullable=False)

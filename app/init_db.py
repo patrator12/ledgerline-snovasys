@@ -35,7 +35,7 @@ def upgrade_ledger_hash_chain(engine) -> None:
         connection.execute(text("DROP TRIGGER IF EXISTS ledger_entries_append_only ON ledger_entries"))
         connection.execute(text("ALTER TABLE ledger_entries ADD COLUMN IF NOT EXISTS previous_hash VARCHAR(64)"))
         connection.execute(text("ALTER TABLE ledger_entries ADD COLUMN IF NOT EXISTS entry_hash VARCHAR(64)"))
-        rows = list(connection.execute(text("SELECT id, transfer_id::text AS transfer_id, account_id::text AS account_id, actor_id, amount_paise, resulting_balance_paise, kind, created_at, previous_hash, entry_hash FROM ledger_entries ORDER BY id")).mappings())
+        rows = list(connection.execute(text("SELECT id, transfer_id::text AS transfer_id, account_id::text AS account_id, actor_id, amount_paise, side, contra_account, resulting_balance_paise, kind, created_at, previous_hash, entry_hash FROM ledger_entries ORDER BY id")).mappings())
         incomplete = [row for row in rows if row["previous_hash"] is None or row["entry_hash"] is None]
         if incomplete and len(incomplete) != len(rows):
             raise RuntimeError("Ledger hash chain is partially populated; refusing to rewrite it")
@@ -46,7 +46,7 @@ def upgrade_ledger_hash_chain(engine) -> None:
             entry = SimpleNamespace(
                 transfer_id=row["transfer_id"], account_id=row["account_id"], actor_id=row["actor_id"],
                 amount_paise=row["amount_paise"], resulting_balance_paise=row["resulting_balance_paise"],
-                kind=row["kind"], created_at=row["created_at"],
+                kind=row["kind"], created_at=row["created_at"], side=row["side"], contra_account=row["contra_account"],
             )
             if incomplete:
                 entry_hash = ledger_entry_digest(entry, previous_hash)
@@ -59,6 +59,50 @@ def upgrade_ledger_hash_chain(engine) -> None:
         connection.execute(text("ALTER TABLE ledger_entries ALTER COLUMN previous_hash SET NOT NULL"))
         connection.execute(text("ALTER TABLE ledger_entries ALTER COLUMN entry_hash SET NOT NULL"))
         connection.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS uq_ledger_entries_entry_hash ON ledger_entries(entry_hash)"))
+
+
+def upgrade_double_entry(engine) -> None:
+    """Convert signed legacy deltas into positive debit/credit postings and balance external flows."""
+    with engine.begin() as connection:
+        connection.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": CHAIN_LOCK_KEY})
+        columns = {column["name"] for column in inspect(connection).get_columns("ledger_entries")}
+        legacy = "side" not in columns
+        if not legacy and "contra_account" in columns:
+            return
+        connection.execute(text("DROP TRIGGER IF EXISTS ledger_entries_append_only ON ledger_entries"))
+        connection.execute(text("ALTER TABLE ledger_entries ADD COLUMN IF NOT EXISTS side VARCHAR(6)"))
+        connection.execute(text("ALTER TABLE ledger_entries ADD COLUMN IF NOT EXISTS contra_account VARCHAR(32)"))
+        connection.execute(text("ALTER TABLE ledger_entries ADD COLUMN IF NOT EXISTS previous_hash VARCHAR(64)"))
+        connection.execute(text("ALTER TABLE ledger_entries ADD COLUMN IF NOT EXISTS entry_hash VARCHAR(64)"))
+        connection.execute(text("ALTER TABLE ledger_entries ALTER COLUMN previous_hash DROP NOT NULL"))
+        connection.execute(text("ALTER TABLE ledger_entries ALTER COLUMN entry_hash DROP NOT NULL"))
+        connection.execute(text("ALTER TABLE ledger_entries ALTER COLUMN account_id DROP NOT NULL"))
+        connection.execute(text("ALTER TABLE ledger_entries DROP CONSTRAINT IF EXISTS ck_ledger_nonzero_posting"))
+        connection.execute(text("ALTER TABLE ledger_entries DROP CONSTRAINT IF EXISTS ck_ledger_positive_posting"))
+        connection.execute(text("ALTER TABLE ledger_entries DROP CONSTRAINT IF EXISTS ck_ledger_valid_side"))
+        if legacy:
+            rows = list(connection.execute(text("SELECT id, transfer_id::text, account_id::text, actor_id, amount_paise, resulting_balance_paise, kind FROM ledger_entries ORDER BY id")).mappings())
+            for row in rows:
+                side = "DEBIT" if row["amount_paise"] > 0 else "CREDIT"
+                connection.execute(text("UPDATE ledger_entries SET side=:side, amount_paise=:amount WHERE id=:id"), {"side": side, "amount": abs(row["amount_paise"]), "id": row["id"]})
+                if row["kind"] in {"deposit", "withdrawal", "opening_balance"}:
+                    contra_side = "CREDIT" if side == "DEBIT" else "DEBIT"
+                    if row["kind"] == "withdrawal":
+                        contra_side = "DEBIT"
+                        side = "CREDIT"
+                    connection.execute(text("INSERT INTO ledger_entries (transfer_id, account_id, actor_id, amount_paise, side, contra_account, resulting_balance_paise, kind, previous_hash, entry_hash, created_at) SELECT transfer_id, NULL, actor_id, :amount, :side, 'EXTERNAL_CLEARING', 0, :kind, NULL, NULL, created_at FROM ledger_entries WHERE id=:id"), {"amount": abs(row["amount_paise"]), "side": contra_side, "kind": row["kind"], "id": row["id"]})
+        connection.execute(text("ALTER TABLE ledger_entries ALTER COLUMN side SET NOT NULL"))
+        connection.execute(text("ALTER TABLE ledger_entries ADD CONSTRAINT ck_ledger_positive_posting CHECK (amount_paise > 0)"))
+        connection.execute(text("ALTER TABLE ledger_entries ADD CONSTRAINT ck_ledger_valid_side CHECK (side IN ('DEBIT','CREDIT'))"))
+        previous = GENESIS_HASH
+        rows = list(connection.execute(text("SELECT id, transfer_id::text AS transfer_id, account_id::text AS account_id, actor_id, amount_paise, side, contra_account, resulting_balance_paise, kind, created_at FROM ledger_entries ORDER BY id")).mappings())
+        for row in rows:
+            entry = SimpleNamespace(**row)
+            digest = ledger_entry_digest(entry, previous)
+            connection.execute(text("UPDATE ledger_entries SET previous_hash=:previous, entry_hash=:digest WHERE id=:id"), {"previous": previous, "digest": digest, "id": row["id"]})
+            previous = digest
+        connection.execute(text("ALTER TABLE ledger_entries ALTER COLUMN previous_hash SET NOT NULL"))
+        connection.execute(text("ALTER TABLE ledger_entries ALTER COLUMN entry_hash SET NOT NULL"))
 
 
 def install_append_only_guard(engine, table_name: str) -> None:
@@ -83,6 +127,7 @@ if __name__ == "__main__":
     Base.metadata.create_all(bind=engine)
     upgrade_audit_outcomes(engine)
     upgrade_governance_fields(engine)
+    upgrade_double_entry(engine)
     upgrade_ledger_hash_chain(engine)
     install_append_only_guard(engine, "ledger_entries")
     install_append_only_guard(engine, "audit_events")
@@ -93,7 +138,8 @@ if __name__ == "__main__":
         connection.execute(text(f"GRANT UPDATE (kyc_status) ON users TO {app_user}"))
         connection.execute(text(f"GRANT SELECT, INSERT, DELETE ON web_sessions TO {app_user}"))
         connection.execute(text(f"GRANT SELECT, INSERT, UPDATE, DELETE ON login_throttles TO {app_user}"))
-        connection.execute(text(f"GRANT SELECT, INSERT ON accounts, idempotency_records TO {app_user}"))
+        connection.execute(text(f"GRANT SELECT, INSERT ON accounts TO {app_user}"))
+        connection.execute(text(f"GRANT SELECT, INSERT, DELETE ON idempotency_records TO {app_user}"))
         connection.execute(text(f"GRANT UPDATE (balance_paise) ON accounts TO {app_user}"))
         connection.execute(text(f"GRANT UPDATE (frozen) ON accounts TO {app_user}"))
         connection.execute(text(f"GRANT UPDATE (result) ON idempotency_records TO {app_user}"))

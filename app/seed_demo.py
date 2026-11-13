@@ -42,7 +42,8 @@ def main() -> None:
             db.add(account)
             db.flush()
             if balance:
-                append_ledger_entries(db, [LedgerEntry(transfer_id=str(uuid.uuid4()), account_id=account.id, actor_id=people["admin"].id, amount_paise=balance, resulting_balance_paise=balance, kind="opening_balance")])
+                transfer_id = str(uuid.uuid4())
+                append_ledger_entries(db, [LedgerEntry(transfer_id=transfer_id, account_id=account.id, actor_id=people["admin"].id, amount_paise=balance, side="DEBIT", resulting_balance_paise=balance, kind="opening_balance"), LedgerEntry(transfer_id=transfer_id, account_id=None, actor_id=people["admin"].id, amount_paise=balance, side="CREDIT", contra_account="EXTERNAL_CLEARING", resulting_balance_paise=0, kind="opening_balance")])
             db.add(AuditEvent(actor_id=people["admin"].id, account_id=account.id, action="account_seed", outcome="succeeded", details={"opening_balance_paise": balance}))
         db.commit()
     print("Demo users are ready: demo-admin, demo-holder, demo-auditor. Passwords are the values supplied in SEED_*_PASSWORD.")

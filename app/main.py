@@ -18,7 +18,7 @@ from sqlalchemy.orm import Session
 from app.config import SECURE_COOKIES, SESSION_COOKIE
 from app.database import get_db
 from app.models import Account, AuditEvent, LedgerEntry, User, WebSession
-from app.money import DUMMY_PASSWORD_HASH, MAX_TRANSACTION_PAISE, create_web_session, current_session, move_money, verify_password
+from app.money import DUMMY_PASSWORD_HASH, MAX_TRANSACTION_PAISE, create_web_session, current_session, hash_password, move_money, verify_password
 from app.login_throttle import clear_login_failures, login_is_blocked, lock_login_bucket, record_login_failure, throttle_key
 from app.ledger_chain import verify_ledger
 
@@ -121,6 +121,9 @@ def login(request: Request, username: str = Form(..., max_length=80), password: 
     if not user or not user.active or not valid_password:
         record_login_failure(db, key_hash)
         return templates.TemplateResponse(request=request, name="login.html", context={"csrf": cookie_token, "error": "Username or password was not accepted."}, status_code=401)
+    if not user.password_hash.startswith(("$2a$", "$2b$", "$2y$")):
+        user.password_hash = hash_password(password)
+        db.commit()
     clear_login_failures(db, key_hash)
     raw_token, _ = create_web_session(db, user)
     response = RedirectResponse("/dashboard", status_code=303)
