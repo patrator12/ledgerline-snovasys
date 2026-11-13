@@ -160,3 +160,11 @@ This record is being kept as work proceeds. Entries describe actual assistance a
 - **What I changed:** Updated README, API, threat model, demo outline, and operations runbook to describe the shipped bcrypt/JWT flow, balanced postings, 24-hour idempotency, deployment URL, current test result, and backup/verification steps before ledger migration.
 - **Verification:** `git diff --check` passed; compared the docs against the current app behavior and latest 35-test Docker run.
 - **Commit:** [2975c4b](https://github.com/patrator12/ledgerline-snovasys/commit/2975c4b8a51869d97f4eac427209b5882b04b20e).
+
+## 2026-11-13 — Authentication and transaction UX refinements
+
+- **Asked:** Implement the suggested login, balance-label, transaction-flow, signing-key, password-length, and legacy-ledger migration improvements.
+- **What I changed:** Added a PostgreSQL regression test for repeated conversion of legacy signed rows; made balances neutral where frozen accounts are included; disabled frozen accounts in transaction selectors and clarified that submit posts immediately; added an accessible login password toggle; retained long legacy Argon2 login while enforcing bcrypt's 72-byte limit for new hashes and seed passwords; validated signing-key length and added its optional Render/Compose configuration.
+- **Security note:** No `SESSION_SIGNING_KEY` value was added to Render. The user previously said they would enter deployment secrets themselves; changing the key will invalidate active sessions.
+- **Verification:** `python3 -m compileall -q app tests` and `git diff --check` passed. The PostgreSQL suite could not run from this session because the Docker socket is denied; rerun `docker compose --profile test run --build --rm tests` from the project directory before pushing or deploying.
+- **Commit:** [5fb1e68](https://github.com/patrator12/ledgerline-snovasys/commit/5fb1e6883695ba5371a71ca4401b960b6ca9bc2e).
