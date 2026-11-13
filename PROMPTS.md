@@ -151,3 +151,4 @@ This record is being kept as work proceeds. Entries describe actual assistance a
 - **Verification:** The submitted run built the image and reported 34 passed, 1 failed in 4.10 seconds. Python compilation and `git diff --check` pass after the test fix; the suite needs a rerun.
 - **Commit:** [b1e7b86](https://github.com/patrator12/ledgerline-snovasys/commit/b1e7b86a9f531eb194a83c819d981118c93082dd).
 - **Follow-up verification:** The user rebuilt and reran `docker compose --profile test run --build --rm tests` after the cookie-header test fix; all 35 tests passed in 4.06 seconds.
+- **Release verification:** Pushed the changes to `main` at [cc6e94b](https://github.com/patrator12/ledgerline-snovasys/commit/cc6e94b). The deployed `/login` returned HTTP 200, and `GET /api/ledger/verify` returned `valid: true` with 8 entries, 3 accounts checked, and no parity mismatches.
