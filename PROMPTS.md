@@ -134,3 +134,11 @@ This record is being kept as work proceeds. Entries describe actual assistance a
 - **What I changed:** Increased pip's network timeout to 120 seconds and retries to five.
 - **Verification:** `git diff --check` passed. Docker remains inaccessible from this Codex session, so the rebuilt PostgreSQL test suite still needs to be run from the user's terminal.
 - **Commit:** [9beb536](https://github.com/patrator12/ledgerline-snovasys/commit/9beb5366a2fd666080501cc401038ef38fb42195).
+
+## 2026-11-13 — Docker pip cache retry
+
+- **Asked:** Continue after the rebuilt test image failed again.
+- **Finding:** The longer timeout got past the earlier SQLAlchemy download stall, but PyPI disconnected during dependency resolution and pip reported that it could not resolve Jinja2's `MarkupSafe` dependency.
+- **What I changed:** Persist pip's cache across BuildKit attempts and increased network retries to ten.
+- **Verification:** `git diff --check` passed. The test command cannot run from this session because Docker socket access is denied; the user needs to rerun the build and tests from their terminal.
+- **Commit:** [8eaded9](https://github.com/patrator12/ledgerline-snovasys/commit/8eaded9c62b04c3f2ef76962ab72fd7764910da0).
