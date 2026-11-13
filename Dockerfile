@@ -3,7 +3,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
 WORKDIR /srv/ledgerline
 RUN useradd --system --uid 10001 --create-home ledgerline && chown ledgerline:ledgerline /srv/ledgerline
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir --timeout=120 --retries=5 -r requirements.txt
 COPY --chown=ledgerline:ledgerline app ./app
 COPY --chown=ledgerline:ledgerline tests ./tests
 USER ledgerline
