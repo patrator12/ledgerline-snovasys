@@ -36,7 +36,7 @@ The live Render deployment is [ledgerline-snovasys.onrender.com](https://ledgerl
 - `MIGRATION_DATABASE_URL`: direct PostgreSQL owner URL used for schema setup and demo seeding.
 - `SEED_ADMIN_PASSWORD`, `SEED_HOLDER_PASSWORD`, and `SEED_AUDITOR_PASSWORD`: passwords for the three demo users.
 - `APP_ENV=production`: enables Secure `__Host-` session cookies and HSTS.
-- `SESSION_SIGNING_KEY` (recommended): independent random secret of at least 32 bytes for JWT sessions. Generate it with `openssl rand -hex 32` and set it in Render's environment settings. Changing it revokes existing sessions. If unset, the app derives the key from the private database URL.
+- `SESSION_SIGNING_KEY`: required independent random secret of at least 32 bytes for JWT sessions. Generate it with `openssl rand -hex 32` and set it in Render's environment settings and your local `.env`. The app fails to start if it is missing or too short. Changing it revokes existing sessions.
 
 The Docker startup command applies the schema and append-only guards, seeds demo accounts, then starts Uvicorn on Render's `PORT`. Keep database URLs and passwords in the hosting provider's secret settings; never commit them or place live passwords in this README. Demo passwords are not published here.
 
