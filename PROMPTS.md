@@ -118,3 +118,11 @@ This record is being kept as work proceeds. Entries describe actual assistance a
 - **What I changed:** Serialized login attempts for each throttle key, bounded old throttle-row cleanup, documented distributed-attack and storage risks, and made the audit checkpoint verify a stored event prefix so later normal events do not invalidate it.
 - **Verification:** Python compilation and `git diff --check` passed. The first attempt from Codex could not access Docker's socket; the user then rebuilt and ran `docker compose --profile test run --build --rm tests` on 2026-11-11, and all 24 tests passed in 1.12 seconds.
 - **Commit:** [623be73](https://github.com/patrator12/ledgerline-snovasys/commit/623be739f11d61c98edb8425ba975d9e7ae616b4).
+
+## 2026-11-13 — Ledger, session, and idempotency hardening
+
+- **Asked:** Complete the remaining improvements for balanced ledger postings, bcrypt password hashes, signed sessions, and 24-hour idempotency retention, then finish the release work.
+- **Produced:** Added explicit debit/credit postings including external clearing entries, migration support for existing ledger rows, bcrypt-first password hashing with Argon2 upgrade on login, signed HS256 session cookies backed by revocable server records, and 24-hour idempotency expiry. Updated templates, tests, and README.
+- **Review finding:** Existing hash-chain columns are non-null, so the migration must temporarily relax those constraints while it inserts clearing postings and rebuilds the chain. This was corrected before release.
+- **Verification:** `python3 -m compileall -q app tests` and `git diff --check` passed. PostgreSQL integration tests could not start because Docker denied access to both configured API sockets, and no local PostgreSQL server is available. The changes have not been pushed or deployed pending database-backed test verification.
+- **Commit:** [e66fe06](https://github.com/patrator12/ledgerline-snovasys/commit/e66fe0606a2b8caf6787a64e46095a8b3ce8b134).
