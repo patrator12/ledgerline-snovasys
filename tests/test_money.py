@@ -315,7 +315,11 @@ def test_login_requires_csrf_and_success_creates_session(actors_and_accounts):
         session = db.scalar(select(WebSession).where(WebSession.user_id == admin.id))
         assert session is not None
         assert session.token_hash != "pending"
-        token = accepted.headers["set-cookie"].split("=", 1)[1].split(";", 1)[0]
+        session_cookie = next(
+            cookie for cookie in accepted.headers.getlist("set-cookie")
+            if cookie.startswith(f"{SESSION_COOKIE}=")
+        )
+        token = session_cookie.split("=", 1)[1].split(";", 1)[0]
         assert current_session(db, authenticated_request(token, "/dashboard", "GET"))[0].id == admin.id
 
 
