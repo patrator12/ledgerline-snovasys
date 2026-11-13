@@ -9,7 +9,9 @@ docker compose ps
 docker compose logs --tail=100 web db
 ```
 
-The web container should report that the schema and append-only guards are ready, the demo users are ready, and Uvicorn is listening. Startup adds the KYC/freeze fields and backfills the ledger hash chain once. If a later startup finds a partially populated or invalid chain, it fails closed; preserve the database and inspect it rather than rebuilding the chain. If startup otherwise stops, check database reachability and the values configured for `DATABASE_URL`, `MIGRATION_DATABASE_URL`, and the seed-password variables. Do not print or paste environment values into logs or support messages.
+The web container should report that the schema and append-only guards are ready, the demo users are ready, and Uvicorn is listening. Startup adds the KYC/freeze fields, converts legacy signed ledger deltas into balanced debit/credit postings, and builds or verifies the SHA-256 chain. If a later startup finds a partially populated or invalid chain, it fails closed; preserve the database and inspect it rather than rebuilding the chain. If startup otherwise stops, check database reachability and the values configured for `DATABASE_URL`, `MIGRATION_DATABASE_URL`, and the seed-password variables. Do not print or paste environment values into logs or support messages.
+
+Before deploying a release that migrates an existing ledger, take and retain a database backup. After startup, verify `/api/ledger/verify`; stop and investigate if it returns `valid: false`.
 
 For Render, inspect the service's deploy and runtime logs. A successful image build does not prove the database connection or startup commands succeeded. Verify the health check at `/login`; only share the relevant error lines, with credentials and connection strings removed.
 

@@ -30,24 +30,25 @@ Stop the app with docker compose down. Database data is stored in a named Docker
 
 ## Deployment configuration
 
-The Render blueprint is in `render.yaml`. It expects these private environment variables to be set in Render:
+The live Render deployment is [ledgerline-snovasys.onrender.com](https://ledgerline-snovasys.onrender.com). The Render blueprint is in `render.yaml`. It expects these private environment variables to be set in Render:
 
 - `DATABASE_URL`: pooled PostgreSQL URL for normal app requests.
 - `MIGRATION_DATABASE_URL`: direct PostgreSQL owner URL used for schema setup and demo seeding.
 - `SEED_ADMIN_PASSWORD`, `SEED_HOLDER_PASSWORD`, and `SEED_AUDITOR_PASSWORD`: passwords for the three demo users.
-- `APP_ENV=production`: enables Secure session cookies and HSTS.
+- `APP_ENV=production`: enables Secure `__Host-` session cookies and HSTS.
+- `SESSION_SIGNING_KEY` (optional): dedicated signing key for JWT sessions. If omitted, the app derives it from the private database URL; setting an independent random secret makes key rotation and incident response clearer.
 
-The Docker startup command applies the schema and append-only guards, seeds demo accounts, then starts Uvicorn on Render's `PORT`. Keep database URLs and passwords in the hosting provider's secret settings; never commit them or place live passwords in this README. The current public deployment URL and account passwords are intentionally not duplicated here.
+The Docker startup command applies the schema and append-only guards, seeds demo accounts, then starts Uvicorn on Render's `PORT`. Keep database URLs and passwords in the hosting provider's secret settings; never commit them or place live passwords in this README. Demo passwords are not published here.
 
 ## Money rules
 
-- Amounts are stored as positive integer paise in explicit `DEBIT` and `CREDIT` postings; no floating point is used for balance arithmetic. Every transfer has equal debit and credit totals. Deposits, withdrawals, and opening balances pair account postings with the `EXTERNAL_CLEARING` contra account.
+- Amounts are stored as positive integer paise in explicit `DEBIT` and `CREDIT` postings; no floating point is used for balance arithmetic. Every movement group has equal debit and credit totals. Deposits, withdrawals, and opening balances pair account postings with the `EXTERNAL_CLEARING` contra account.
 - Administrators can create accounts, deposit, withdraw, transfer, review holder KYC status, and freeze or unfreeze accounts. New owned accounts can be assigned only to active, KYC-approved holders. Holders can move funds only when approved and only between accounts they own. Frozen accounts reject all money movements. Auditors can view accounts, statements, and the global audit log but cannot move money or change governance state.
 - Each movement has an actor-scoped idempotency key and a payload hash. Replaying the same key and request returns its saved result; reusing a key with a different request is refused.
 - Idempotency results expire after 24 hours. Reuse after expiry is treated as a new request.
 - Money-moving requests lock every involved account row in sorted ID order. The balance check, account balance updates, ledger postings, audit event, and idempotency result commit in one PostgreSQL transaction.
-- Every ledger posting links to the previous posting with a SHA-256 digest. A PostgreSQL transaction advisory lock serializes appends across workers; `GET /api/ledger/verify` checks chain continuity, account balance totals, and equal-and-opposite transfer postings.
-- A transfer writes equal and opposite postings, so its postings sum to zero. Withdrawals and deposits are external movements and change the total by their amount.
+- Every ledger posting links to the previous posting with a SHA-256 digest that covers the posting side and contra account. A PostgreSQL transaction advisory lock serializes appends across workers; `GET /api/ledger/verify` checks chain continuity, account balance totals, and debit/credit parity for every movement group.
+- A transfer writes equal DEBIT and CREDIT postings. Withdrawals and deposits use a paired `EXTERNAL_CLEARING` posting and change the total held in customer accounts by their amount.
 - ledger_entries and audit_events have PostgreSQL triggers that reject updates and deletes. The web app connects as a restricted ledgerline_app role that has insert but no update/delete access to those tables. Schema setup runs using a separate owner connection.
 - Refused movement attempts are recorded with the actor, reason, requested amount, and balance observed while the account row is locked, where the account exists.
 - Passwords use bcrypt for new hashes; existing Argon2 hashes upgrade to bcrypt at the next successful login. Browser sessions are signed HS256 JWTs with an HttpOnly cookie and server-side session record so logout can revoke them. The signing key can be set with `SESSION_SIGNING_KEY`; otherwise it is derived from the private database URL.
@@ -68,7 +69,7 @@ The server applies these checks on each request. UI visibility is not an authori
 2. The service hashes the request fields and checks whether this actor/key already has a result. A changed payload under the same key is refused.
 3. It inserts the idempotency record inside the transaction, then locks the existing source and destination rows with SELECT FOR UPDATE in sorted ID order.
 4. After acquiring the locks, it checks account status, freeze state, role, holder KYC approval, ownership, and available source balance.
-5. If valid, it updates both cached balances, inserts equal-and-opposite ledger postings, writes an audit event, and saves the response on the idempotency record. A matching retry returns that saved response and adds an append-only replay event without posting money again.
+5. If valid, it updates both cached balances, inserts equal DEBIT and CREDIT postings, writes an audit event, and saves the response on the idempotency record. A matching retry returns that saved response and adds an append-only replay event without posting money again.
 6. Each new ledger posting is linked to the prior hash while holding the chain advisory lock. One commit makes all movement and chain writes visible together. If any database write fails, none of the movement is committed.
 7. If another request has the same actor/key, PostgreSQL's unique constraint makes it wait for the first transaction. It then returns the saved result or, if the first transaction rolled back, can process the request itself.
 
@@ -80,11 +81,11 @@ The integration suite starts a separate PostgreSQL container with a temporary fi
 
         docker compose --profile test run --build --rm tests
 
-The tests cover balanced debit/credit postings and transfer conservation, deposits and withdrawals, 24-hour retry expiry and concurrent key conflicts, idempotency payload conflicts, cross-account access, concurrent withdrawals, account-owner assignment, auditor restrictions, login CSRF and throttling, signed session expiry, transaction CSRF, invalid account IDs, filtered audit pagination, audit checkpoint stability, ledger-chain verification, KYC and freeze controls, amount parsing, and database append-only behavior. `tests/test_stride.py` adds one regression group for each STRIDE category. Run them against the isolated PostgreSQL test service after changes; they do not share the demo database.
+The tests cover balanced debit/credit postings and transfer conservation, deposits and withdrawals, 24-hour retry expiry and concurrent key conflicts, idempotency payload conflicts, cross-account access, concurrent withdrawals, account-owner assignment, auditor restrictions, login CSRF and throttling, signed-session login and expiry, transaction CSRF, invalid account IDs, filtered audit pagination, audit checkpoint stability, ledger-chain verification, KYC and freeze controls, amount parsing, and database append-only behavior. `tests/test_stride.py` adds one regression group for each STRIDE category. The latest recorded Docker PostgreSQL run passed all 35 tests; rerun the suite after changes.
 
 ## Current limits
 
-This is a challenge prototype, not a production banking service. Ledger entries remain signed account deltas with cached balances rather than a general-ledger debit/credit journal; deposits and withdrawals use external-movement postings. The public verifier scans the full ledger and is intended for challenge-scale data. It does not implement MFA, password reset, multi-currency conversion, reversals/refunds, holds, automatic backups, or continuous external audit monitoring. Login throttling is per username/address pair and does not stop distributed guessing. The manual audit checkpoint detects changes only when its file is stored separately with stronger access controls. The auditor view is read-only. Deployment still needs HTTPS and deployment-specific secrets; production cookies switch to Secure and the __Host- prefix when APP_ENV=production.
+This is a challenge prototype, not a production banking service. It uses a compact debit/credit journal with one `EXTERNAL_CLEARING` contra account for deposits, withdrawals, and opening balances; it is not a full production chart of accounts. The public verifier scans the full ledger and is intended for challenge-scale data. It does not implement MFA, password reset, multi-currency conversion, reversals/refunds, holds, automatic backups, or continuous external audit monitoring. Login throttling is per username/address pair and does not stop distributed guessing. The manual audit checkpoint detects changes only when its file is stored separately with stronger access controls. The auditor view is read-only. Keep deployment secrets private and use HTTPS; production cookies use Secure and the `__Host-` prefix when `APP_ENV=production`.
 
 ## Project files
 

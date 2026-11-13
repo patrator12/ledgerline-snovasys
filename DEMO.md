@@ -11,7 +11,7 @@ Record the current working build only. Use the local seeded accounts or replace 
 | 2:35–3:15 | Attempt a withdrawal from an empty account and open its statement. | The balance does not change. The refused attempt records the actor, reason, requested amount, and balance at the attempt. |
 | 3:15–4:00 | As administrator, review holder KYC status and freeze then unfreeze an account. | Governance changes are server-authorized, CSRF-protected, written to the audit log, and enforced on money movement. |
 | 4:00–4:35 | Open `/api/ledger/verify`, then show the automated test output. | The public verifier recomputes the ledger chain, account balance totals, and transfer posting parity. The PostgreSQL suite includes a dedicated six-category STRIDE group. |
-| 4:35–5:00 | Filter the audit history, then walk through `THREATS.md`. | Explain database and service controls, the manual out-of-band audit checkpoint, and accepted limits: signed delta entries rather than a general-ledger debit/credit model, no MFA, distributed login throttling, reversals, multi-currency conversion, automatic backups, or continuous external audit monitoring. |
+| 4:35–5:00 | Filter the audit history, then walk through `THREATS.md`. | Explain database and service controls, the manual out-of-band audit checkpoint, and accepted limits: one `EXTERNAL_CLEARING` contra account rather than a full production chart of accounts, no MFA, distributed login throttling, reversals, multi-currency conversion, automatic backups, or continuous external audit monitoring. |
 
 ## Recording checklist
 
