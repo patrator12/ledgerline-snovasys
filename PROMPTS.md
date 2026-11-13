@@ -126,3 +126,11 @@ This record is being kept as work proceeds. Entries describe actual assistance a
 - **Review finding:** Existing hash-chain columns are non-null, so the migration must temporarily relax those constraints while it inserts clearing postings and rebuilds the chain. This was corrected before release.
 - **Verification:** `python3 -m compileall -q app tests` and `git diff --check` passed. PostgreSQL integration tests could not start because Docker denied access to both configured API sockets, and no local PostgreSQL server is available. The changes have not been pushed or deployed pending database-backed test verification.
 - **Commit:** [e66fe06](https://github.com/patrator12/ledgerline-snovasys/commit/e66fe0606a2b8caf6787a64e46095a8b3ce8b134).
+
+## 2026-11-13 — Docker dependency-download timeout
+
+- **Asked:** Continue the pending verification after sharing the Docker test output.
+- **Finding:** The image build reached `pip install` but timed out while downloading SQLAlchemy from PyPI; the test suite had not started.
+- **What I changed:** Increased pip's network timeout to 120 seconds and retries to five.
+- **Verification:** `git diff --check` passed. Docker remains inaccessible from this Codex session, so the rebuilt PostgreSQL test suite still needs to be run from the user's terminal.
+- **Commit:** [9beb536](https://github.com/patrator12/ledgerline-snovasys/commit/9beb5366a2fd666080501cc401038ef38fb42195).
