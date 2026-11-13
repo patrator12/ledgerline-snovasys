@@ -152,3 +152,11 @@ This record is being kept as work proceeds. Entries describe actual assistance a
 - **Commit:** [b1e7b86](https://github.com/patrator12/ledgerline-snovasys/commit/b1e7b86a9f531eb194a83c819d981118c93082dd).
 - **Follow-up verification:** The user rebuilt and reran `docker compose --profile test run --build --rm tests` after the cookie-header test fix; all 35 tests passed in 4.06 seconds.
 - **Release verification:** Pushed the changes to `main` at [cc6e94b](https://github.com/patrator12/ledgerline-snovasys/commit/cc6e94b). The deployed `/login` returned HTTP 200, and `GET /api/ledger/verify` returned `valid: true` with 8 entries, 3 accounts checked, and no parity mismatches.
+
+## 2026-11-13 — Documentation consistency pass
+
+- **Asked:** Check whether the GitHub README and remaining project files reflect the latest updates.
+- **Finding:** API and demo docs still described Argon2-only opaque sessions and signed-delta ledger entries. README's current-limits section contradicted the implemented debit/credit postings, the deployment link was missing, and the threat and operations docs lacked current session and migration guidance.
+- **What I changed:** Updated README, API, threat model, demo outline, and operations runbook to describe the shipped bcrypt/JWT flow, balanced postings, 24-hour idempotency, deployment URL, current test result, and backup/verification steps before ledger migration.
+- **Verification:** `git diff --check` passed; compared the docs against the current app behavior and latest 35-test Docker run.
+- **Commit:** [2975c4b](https://github.com/patrator12/ledgerline-snovasys/commit/2975c4b8a51869d97f4eac427209b5882b04b20e).
